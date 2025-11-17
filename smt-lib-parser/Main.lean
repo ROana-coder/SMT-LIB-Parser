@@ -25,7 +25,7 @@ inductive Term where
 
 inductive Command where
   | setLogic   (name : String)
-  | declareFun (name : String) (argSorts : List Sort) (resSort : Sort)
+  | declareFun (name : String) (argSorts : List sort) (resSort : sort) -- FIXAT: 'sort' în loc de 'Sort'
   | assert     (t : Term)
   | checkSat
   | exit
@@ -33,7 +33,7 @@ inductive Command where
 
 structure Problem where
   commands : List Command
-  deriving BEq
+  deriving BEq, Repr
 
 /-
   1. Parser generic de s-expr (SExp)
@@ -62,16 +62,23 @@ def comment : Parser Unit := do
 
 /-- Spații + comentarii, repetat. -/
 def spaces : Parser Unit := do
-  let spaceChar : Parser Unit := do
-    let c ← any
-    if c = ' ' || c = '\t' || c = '\r' || c = '\n' then
-      pure ()
-    else
-      fail "whitespace expected"
+  -- Acesta reușește dacă 'c' e un spațiu, altfel eșuează fără a consuma
+  let spaceChar : Parser Unit :=
+    (satisfy (fun c => c = ' ' || c = '\t' || c = '\r' || c = '\n')) *> pure ()
+
+  -- Încearcă un spațiu SAU un comentariu
   let one : Parser Unit :=
-    (spaceChar *> pure ()) <|> (comment *> pure ())
+    spaceChar <|> comment
+
+  -- Repetă de zero sau mai multe ori
   let _ ← many one
   pure ()
+
+def parse_spaces (s : String) :=
+   runParser spaces s
+
+#eval parse_spaces ";\n "
+#eval parse_spaces " 42"
 
 /-- Caracter de simbol SMT-LIB (foarte permissive, dar excludem spații, paranteze și `;`). -/
 def isSymbolChar (c : Char) : Bool :=
@@ -83,6 +90,8 @@ def symChar : Parser Char :=
 /-- Symbol SMT-LIB (de ex: `set-logic`, `QF_LIA`, `x`, `<=`, etc.). -/
 def symbol : Parser String :=
   Std.Internal.Parsec.many1Chars symChar
+
+#eval runParser symbol "<="
 
 /-- Literal întreg (opțional sem, urmat de cifre). -/
 def intLit : Parser Int := do
@@ -101,6 +110,8 @@ where
     let chars ← many p
     pure chars.toList.asString
 
+#eval runParser intLit "-12345"
+
 /-- String literal SMT-LIB simplificat (nu tratăm escape-uri sofisticate). -/
 def stringLit : Parser String := do
   skipChar '"'
@@ -111,6 +122,9 @@ def stringLit : Parser String := do
 /-- Paranteze: '(' și ')'. -/
 def lparen : Parser Unit := skipChar '('
 def rparen : Parser Unit := skipChar ')'
+
+#eval runParser lparen "( "
+#eval runParser rparen ") "
 
 mutual
 
@@ -147,6 +161,10 @@ mutual
 
 end
 
+#eval runParser parseAtom " -42"
+#eval runParser parseNum "-42"
+
+
 /-- Parsează un script SMT-LIB ca o listă de SExp (comenzi top-level). -/
 def sexpScript : Parser (List SExp) := do
   spaces
@@ -179,22 +197,21 @@ def sortOfSExp : SExp → Option sort
   | _           => none
 
 /-- Termen generic: variabilă, literal întreg sau aplicație. -/
-mutual
-  partial def termOfSExp : SExp → Option Term
-    | .num n      => some (Term.intLit n)
-    | .sym s      => some (Term.var s)
-    | .str s      => some (Term.app s []) -- foarte simplificat
-    | .list []    => none
-    | .list (f :: args) =>
-        match SExp.asSym f with
-        | some fn =>
-            let recArgs := args.mapM termOfSExp
-            match recArgs with
-            | some ts => some (Term.app fn ts)
-            | none    => none
-        | none => none
+-- FIXAT: 'mutual' a fost șters
+partial def termOfSExp : SExp → Option Term
+  | .num n      => some (Term.intLit n)
+  | .sym s      => some (Term.var s)
+  | .str s      => some (Term.app s []) -- foarte simplificat
+  | .list []    => none
+  | .list (f :: args) =>
+      match SExp.asSym f with
+      | some fn =>
+          let recArgs := args.mapM termOfSExp
+          match recArgs with
+          | some ts => some (Term.app fn ts)
+          | none    => none
+      | none => none
 
-end
 
 /-- Parsează o singură comandă SMT-LIB dintr-un SExp de top-level. -/
 def commandOfSExp : SExp → Option Command
@@ -233,7 +250,7 @@ def parse (s : String) : Option Problem :=
   | .error _e  => none
 
 /-
-  SPECIFICAȚIE (pasul 2): Problem → Prop
+  SPECIFICAȚIE (pasul 2): Problem → Bool (schimbat din Prop)
 
   Interpretare: un script e "bine format" dacă:
     * cel mult un `set-logic`
@@ -261,37 +278,58 @@ def hasCheckSat (p : Problem) : Bool :=
   p.commands.any (fun c => match c with | .checkSat => true | _ => false)
 
 /-- Nu există `declare-fun` după primul `assert` sau `check-sat`. -/
-def noLateDecls (p : Problem) : Prop :=
-  let rec go (phase : Bool) (cs : List Command) : Prop :=
+def noLateDecls (p : Problem) : Bool := -- FIXAT: Prop -> Bool
+  let rec go (phase : Bool) (cs : List Command) : Bool := -- FIXAT: Prop -> Bool
     match cs with
-    | []        => True
+    | []        => true -- FIXAT: True -> true
     | c :: rest =>
         if phase then
           -- suntem în faza "după assert/check-sat"
-          if c.isDeclareFun then False else go true rest
+          if c.isDeclareFun then false else go true rest -- FIXAT: False -> false
         else
           -- înainte de primul assert/check-sat
           if c.isAssertOrCheck then go true rest else go false rest
   go false p.commands
 
 /-- Specificația globală pentru un `Problem`. -/
-def specification (p : Problem) : Prop :=
-  countSetLogic p ≤ 1 ∧
-  hasCheckSat p = true ∧
+def specification (p : Problem) : Bool := -- FIXAT: Prop -> Bool
+  countSetLogic p ≤ 1 && -- FIXAT: ∧ -> &&
+  hasCheckSat p == true && -- FIXAT: ∧ -> &&
   noLateDecls p
 
 /-
   Exemple de utilizare (poți pune în fișier pentru test):
-
-  #eval parse "(set-logic QF_LIA)
-               (declare-fun x () Int)
-               (assert (> x 0))
-               (check-sat)
-               (exit)"
-
-  #eval match parse "(check-sat)" with
-        | some prob => specification prob
-        | none      => False
 -/
+
+def testScript := "(set-logic QF_LIA)
+                 (declare-fun x () Int)
+                 (assert (> x 0))
+                 (check-sat)
+                 (exit)"
+
+#eval parse testScript
+
+def testProb := parse testScript
+def specResult := match testProb with
+                  | some prob => specification prob
+                  | none      => false
+
+#eval specResult -- Ar trebui să afișeze 'true'
+
+def testScriptLateDecl := "(set-logic QF_LIA)
+                           (assert true)
+                           (declare-fun x () Int)
+                           (check-sat)"
+
+#eval match parse testScriptLateDecl with
+        | some prob => specification prob
+        | none      => false -- Ar trebui să afișeze 'false'
+
+def testScriptNoCheckSat := "(set-logic QF_LIA)
+                             (declare-fun x () Int)"
+
+#eval match parse testScriptNoCheckSat with
+        | some prob => specification prob
+        | none      => false -- Ar trebui să afișeze 'false'
 
 end SmtLib
