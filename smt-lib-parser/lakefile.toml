@@ -1,0 +1,7 @@
+name = "smt-lib-parser"
+version = "0.1.0"
+defaultTargets = ["smt-lib-parser"]
+
+[[lean_exe]]
+name = "smt-lib-parser"
+root = "Main"
