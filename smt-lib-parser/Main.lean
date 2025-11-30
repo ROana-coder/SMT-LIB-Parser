@@ -25,7 +25,7 @@ inductive Term where
 
 inductive Command where
   | setLogic   (name : String)
-  | declareFun (name : String) (argSorts : List sort) (resSort : sort) -- FIXAT: 'sort' în loc de 'Sort'
+  | declareFun (name : String) (argSorts : List sort) (resSort : sort)
   | assert     (t : Term)
   | checkSat
   | exit
@@ -34,12 +34,6 @@ inductive Command where
 structure Problem where
   commands : List Command
   deriving BEq, Repr
-
-/-
-  1. Parser generic de s-expr (SExp)
-  2. Traducere SExp -> AST SMT-LIB (Command, Term, Sort)
-  3. parse : String -> Option Problem
--/
 
 inductive SExp where
   | sym  (s : String)
@@ -50,29 +44,32 @@ inductive SExp where
 
 abbrev Parser (α : Type) := Std.Internal.Parsec.String.Parser α
 
-/-- Helper: rulează un parser pe un string. -/
 def runParser {α} (p : Parser α) (input : String) : Except String α :=
   p.run input
 
-/-- Comentarii SMT-LIB: `;` până la sfârșitul liniei. -/
+/-- IMPLEMENTARE ATTEMPT:
+    Dacă parserul `p` eșuează, resetăm cursorul la poziția inițială `it`.
+    Acest lucru este critic pentru a permite spații opționale înainte de ')' -/
+def attempt {α} (p : Parser α) : Parser α := fun it =>
+  match p it with
+  | .success rem a => .success rem a
+  | .error _ err   => .error it err
+
 def comment : Parser Unit := do
   skipChar ';'
-  let _ ← many (satisfy (fun c => c ≠ '\n')) -- ignorăm restul liniei
+  let _ ← many (satisfy (fun c => c ≠ '\n'))
   pure ()
 
-/-- Spații + comentarii, repetat. -/
 def spaces : Parser Unit := do
-  -- Acesta reușește dacă 'c' e un spațiu, altfel eșuează fără a consuma
   let spaceChar : Parser Unit :=
     (satisfy (fun c => c = ' ' || c = '\t' || c = '\r' || c = '\n')) *> pure ()
-
-  -- Încearcă un spațiu SAU un comentariu
-  let one : Parser Unit :=
-    spaceChar <|> comment
-
-  -- Repetă de zero sau mai multe ori
+  let one : Parser Unit := spaceChar <|> comment
   let _ ← many one
   pure ()
+
+/-- Helper: Consumă spații, apoi încearcă parserul cu backtracking.
+    Dacă `p` eșuează după ce a consumat spații, spațiile sunt puse la loc. -/
+def lexeme {α} (p : Parser α) : Parser α := attempt (spaces *> p)
 
 def parse_spaces (s : String) :=
    runParser spaces s
@@ -84,19 +81,16 @@ def parse_spaces (s : String) :=
 def isSymbolChar (c : Char) : Bool :=
   !c.isWhitespace && c ≠ '(' && c ≠ ')' && c ≠ ';'
 
-def symChar : Parser Char :=
-  satisfy isSymbolChar
-
 /-- Symbol SMT-LIB (de ex: `set-logic`, `QF_LIA`, `x`, `<=`, etc.). -/
 def symbol : Parser String :=
-  Std.Internal.Parsec.many1Chars symChar
+  many1Chars (satisfy isSymbolChar)
+
 
 #eval runParser symbol "<="
 
-/-- Literal întreg (opțional sem, urmat de cifre). -/
+/-- Parsează un int, dar NU consumă spațiile din jur (e low-level). -/
 def intLit : Parser Int := do
-  let sign : Int ←
-    (skipChar '-' *> pure (-1)) <|> (pure 1)
+  let sign : Int ← (skipChar '-' *> pure (-1)) <|> (pure 1)
   let first ← String.digit
   let restStr ← manyChars String.digit
   let nStr := String.singleton first ++ restStr
@@ -105,7 +99,6 @@ def intLit : Parser Int := do
   | none   => fail s!"invalid integer literal: {nStr}"
 
 where
-  /-- Helper: repetă un parser de Char într-un String. -/
   manyChars (p : Parser Char) : Parser String := do
     let chars ← many p
     pure chars.toList.asString
@@ -119,33 +112,31 @@ def stringLit : Parser String := do
   skipChar '"'
   pure chars
 
-/-- Paranteze: '(' și ')'. -/
-def lparen : Parser Unit := skipChar '('
-def rparen : Parser Unit := skipChar ')'
+-- Folosim 'lexeme' pentru paranteze ca să "înghițim" spațiul de după ele
+def lparen : Parser Unit := lexeme (skipChar '(')
+def rparen : Parser Unit := lexeme (skipChar ')')
 
 #eval runParser lparen "( "
 #eval runParser rparen ") "
+#eval runParser lparen " ( "
+#eval runParser rparen " ) "
+
 
 mutual
 
-  /-- Parser principal pentru SExp. -/
-  partial def sexp : Parser SExp := do
-    spaces
-    (parseList <|> parseAtom)
+  /-- Parser principal SExp. NU consumă spații la început! -/
+  partial def sexp : Parser SExp :=
+    parseList <|> parseAtom
 
-  /-- Listă s-expr: `(e1 e2 ... en)`. -/
   partial def parseList : Parser SExp := do
-    lparen
-    spaces
-    let xsArr ← many sexp
-    spaces
-    rparen
+    lparen              -- mănâncă '(' și spațiile de după
+    let xsArr ← many sexp -- fiecare sexp mănâncă spațiile de după el (via parseAtom sau parseList)
+    rparen              -- mănâncă ')' și spațiile de după
     pure (SExp.list xsArr.toList)
 
-  /-- Atom: simbol, număr, string. -/
   partial def parseAtom : Parser SExp := do
-    spaces
-    (parseNum <|> parseStr <|> parseSym)
+    -- Aici folosim lexeme! Citim atomul și mâncăm spațiul de după.
+    lexeme (parseNum <|> parseStr <|> parseSym)
 
   partial def parseNum : Parser SExp := do
     let n ← intLit
@@ -162,12 +153,16 @@ mutual
 end
 
 #eval runParser parseAtom " -42"
-#eval runParser parseNum "-42"
+#eval runParser parseNum "-42 "
+
+#eval runParser sexp " ( asdf  1  2 ) "
+#eval runParser sexp " ( asdf  1  2) "
+
 
 
 /-- Parsează un script SMT-LIB ca o listă de SExp (comenzi top-level). -/
 def sexpScript : Parser (List SExp) := do
-  spaces
+  spaces -- <--- AICI curățăm spațiile de la începutul fișierului
   let xsArr ← many sexp
   spaces
   eof
@@ -176,6 +171,15 @@ def sexpScript : Parser (List SExp) := do
 /-
   Conversie SExp -> AST SMT-LIB
 -/
+
+def testScript := "
+                 (set-logic QF_LIA)
+                 (declare-fun x () Int)
+                 (assert (> x 0))
+                 (check-sat)
+                 (exit)"
+
+#eval runParser sexpScript testScript
 
 namespace SExp
 
@@ -300,12 +304,6 @@ def specification (p : Problem) : Bool := -- FIXAT: Prop -> Bool
 /-
   Exemple de utilizare (poți pune în fișier pentru test):
 -/
-
-def testScript := "(set-logic QF_LIA)
-                 (declare-fun x () Int)
-                 (assert (> x 0))
-                 (check-sat)
-                 (exit)"
 
 #eval parse testScript
 
