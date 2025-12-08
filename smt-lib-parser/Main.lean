@@ -179,6 +179,7 @@ def testScript := "
                  (check-sat)
                  (exit)"
 
+
 #eval runParser sexpScript testScript
 
 namespace SExp
@@ -247,11 +248,48 @@ def problemOfSExps (xs : List SExp) : Option Problem := do
   let cmds ← xs.mapM commandOfSExp
   pure { commands := cmds }
 
+
+def parseAssert (s : String) : Option Command :=
+  match runParser sexp s with
+  | .ok xs     => commandOfSExp xs
+  | .error _e  => none
+
+
+def testAssert := "(assert (> 7 0))"
+#eval runParser sexp testAssert
+
+#eval parseAssert testAssert
+
+/-- Interpretează un Term ca o Prop Lean (marcată ca reducible) -/
+@[reducible]
+partial def termToProp : Term → Option Prop
+  | Term.app ">" [Term.intLit a, Term.intLit b] => some (a > b)
+  | Term.app "<" [Term.intLit a, Term.intLit b] => some (a < b)
+  | Term.app "=" [Term.intLit a, Term.intLit b] => some (a = b)
+  | Term.app ">=" [Term.intLit a, Term.intLit b] => some (a ≥ b)
+  | Term.app "<=" [Term.intLit a, Term.intLit b] => some (a ≤ b)
+  | _ => none
+
+@[reducible]
+def specAssert (c : Command) : Option Prop :=
+  match c with
+  | .assert t => termToProp t
+  | _         => none
+
+
+#reduce specAssert (Command.assert (Term.app ">" [Term.intLit 7, Term.intLit 0]))
+
+
 /-- Funcția cerută în enunț: `String → Option Problem`. -/
 def parse (s : String) : Option Problem :=
   match runParser sexpScript s with
   | .ok xs     => problemOfSExps xs
   | .error _e  => none
+
+#eval parse testScript
+def testSpec := exists x : Int , x > 0
+
+
 
 /-
   SPECIFICAȚIE (pasul 2): Problem → Bool (schimbat din Prop)
@@ -325,6 +363,8 @@ def testScriptLateDecl := "(set-logic QF_LIA)
 
 def testScriptNoCheckSat := "(set-logic QF_LIA)
                              (declare-fun x () Int)"
+
+#eval testScriptNoCheckSat
 
 #eval match parse testScriptNoCheckSat with
         | some prob => specification prob
