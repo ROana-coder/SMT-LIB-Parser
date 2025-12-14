@@ -243,7 +243,7 @@ def parse (s : String) : Option Problem :=
    ========================================== -/
 
 -- Pasul 3: Inferența Tipurilor
-partial def inferSort (ctx : Context) (t : SmtTerm) : Option sort :=
+def inferSort (ctx : Context) (t : SmtTerm) : Option sort :=
   match t with
   | SmtTerm.intLit _ => some sort.int
 
@@ -252,17 +252,32 @@ partial def inferSort (ctx : Context) (t : SmtTerm) : Option sort :=
       | some sig => if sig.args.isEmpty then some sig.res else none
       | none     => none
 
+  -- Cazul special: Egalitatea (= a b)
   | SmtTerm.app "=" [t1, t2] => do
       let s1 ← inferSort ctx t1
       let s2 ← inferSort ctx t2
       if s1 == s2 then some sort.bool else none
 
+  -- NOU: Cazul special IF-THEN-ELSE (ite cond then else)
+  | SmtTerm.app "ite" [cond, t1, t2] => do
+      let sCond ← inferSort ctx cond -- 1. Condiția trebuie să aibă un tip
+      let s1    ← inferSort ctx t1   -- 2. Ramura then
+      let s2    ← inferSort ctx t2   -- 3. Ramura else
+
+      -- Regula SMT-LIB: Condiția e Bool, și ramurile sunt identice ca tip
+      if sCond == sort.bool && s1 == s2 then
+        some s1
+      else
+        none
+
+  -- Cazul general: Aplicarea unei funcții standard
   | SmtTerm.app fn args => do
       let sig ← lookup ctx fn
       if sig.args.length != args.length then none
       else
         let argSorts ← args.mapM (inferSort ctx)
         if argSorts == sig.args then some sig.res else none
+
 
 -- Pasul 4: Validarea Secvențială
 def checkCommand (ctx : Context) (cmd : Command) : Option Context :=
@@ -433,18 +448,58 @@ def testAssertStr := "(assert (> 7 0))"
 #eval runParser sexp testAssertStr -- Verificăm S-Expression-ul brut
 #eval parseAssert testAssertStr    -- Verificăm Command-ul parsat
 
+/-- Helper pentru a combina o listă de propoziții cu AND/OR logic din Lean. -/
+def foldProp (op : Prop → Prop → Prop) (base : Prop) (args : List Prop) : Prop :=
+  args.foldr op base
+
 /-- Interpretează un SmtTerm ca o Prop Lean (marcată ca reducible pentru #reduce).
     Aici facem legătura între sintaxa SMT și matematica din Lean. -/
 @[reducible]
 def termToProp : SmtTerm → Option Prop
+  -- 1. Constante Booleene (Verificăm întâi Variabilele, cum le scoate parserul)
+  | SmtTerm.var "true"   => some True
+  | SmtTerm.var "false"  => some False
+
+  -- 1.1 Constante Booleene (Cazul rar când sunt scrise ca aplicații: (true))
+  | SmtTerm.app "true" []  => some True
+  | SmtTerm.app "false" [] => some False
+
+  -- 2. Aritmetică
   | SmtTerm.app ">" [SmtTerm.intLit a, SmtTerm.intLit b] => some (a > b)
   | SmtTerm.app "<" [SmtTerm.intLit a, SmtTerm.intLit b] => some (a < b)
   | SmtTerm.app "=" [SmtTerm.intLit a, SmtTerm.intLit b] => some (a = b)
   | SmtTerm.app ">=" [SmtTerm.intLit a, SmtTerm.intLit b] => some (a ≥ b)
   | SmtTerm.app "<=" [SmtTerm.intLit a, SmtTerm.intLit b] => some (a ≤ b)
-  -- Putem adăuga și True/False explicit
-  | SmtTerm.app "true" []  => some True
-  | SmtTerm.app "false" [] => some False
+
+  -- 3. Operatori Logici
+  | SmtTerm.app "not" [t] =>
+      match termToProp t with
+      | some p => some (¬p)
+      | none => none
+
+  | SmtTerm.app "and" args =>
+      match args.mapM termToProp with
+      | some ps => some (foldProp And True ps)
+      | none => none
+
+  | SmtTerm.app "or" args =>
+      match args.mapM termToProp with
+      | some ps => some (foldProp Or False ps)
+      | none => none
+
+  -- 4. Implicația (Fixat eroarea 'Expected 2')
+  | SmtTerm.app "=>" [t1, t2] =>
+      match termToProp t1, termToProp t2 with
+      | some p1, some p2 => some (p1 → p2)
+      | _, _ => none -- Aici folosim două underscore-uri!
+
+  -- 5. If-Then-Else
+  | SmtTerm.app "ite" [c, t, e] =>
+      match termToProp c, termToProp t, termToProp e with
+      | some pc, some pt, some pe => some ((pc → pt) ∧ (¬pc → pe))
+      | _, _, _ => none -- Aici folosim trei underscore-uri!
+
+  -- 6. Catch-All (TREBUIE SĂ FIE ULTIMUL!)
   | _ => none
 
 /-- Extrage propoziția logică dintr-o comandă assert. -/
@@ -466,21 +521,32 @@ def specAssert (c : Command) : Option Prop :=
 -- Rezultat așteptat: some (10 < 2) (care este False matematic)
 
 
-/-- Transformă un SmtTerm înapoi într-un String citibil (matematic). -/
+/-- Transformă un SmtTerm înapoi într-un String citibil (matematic & logic). -/
 partial def termToString (t : SmtTerm) : String :=
   match t with
   | SmtTerm.intLit n => toString n
   | SmtTerm.var s    => s
-  -- Caz special pentru operatori binari (ca să arate a matematică: a > b)
+
+  -- 1. Logică Booleană (Simboluri Matematice)
+  | SmtTerm.app "not" [x] => s!"(¬ {termToString x})"
+  | SmtTerm.app "and" args => s!"({String.intercalate " ∧ " (args.map termToString)})"
+  | SmtTerm.app "or"  args => s!"({String.intercalate " ∨ " (args.map termToString)})"
+  | SmtTerm.app "=>"  [a, b] => s!"({termToString a} → {termToString b})"
+
+  -- 2. If-Then-Else
+  | SmtTerm.app "ite" [c, t, e] => s!"(if {termToString c} then {termToString t} else {termToString e})"
+
+  -- 3. Aritmetică (Infix)
   | SmtTerm.app op [a, b] =>
       if ["=", ">", "<", ">=", "<=", "+", "-", "*"].contains op then
-        "(" ++ termToString a ++ " " ++ op ++ " " ++ termToString b ++ ")"
+        s!"({termToString a} {op} {termToString b})"
       else
-        -- Funcții standard prefixate: (f x y)
-        "(" ++ op ++ " " ++ termToString a ++ " " ++ termToString b ++ ")"
-  -- Caz general
+        -- Default Prefix: (f x y)
+        s!"({op} {termToString a} {termToString b})"
+
+  -- 4. General
   | SmtTerm.app fn args =>
-      "(" ++ fn ++ " " ++ (String.intercalate " " (args.map termToString)) ++ ")"
+      s!"({fn} {String.intercalate " " (args.map termToString)})"
 
 
 /-- Extrage și afișează condiția dintr-un assert. -/
@@ -489,7 +555,7 @@ def showCondition (input : String) : String :=
   | none => "Eroare Parsare"
   | some cmd =>
       match cmd with
-      | Command.assert t => "Condiția este: " ++ termToString t
+      | Command.assert t => termToString t
       | _ => "Nu este o comandă assert"
 
 -- 1. Test simplu
@@ -528,5 +594,127 @@ def testDefineError := "
       | some prob => specification prob
       | none      => false
 -- Rezultat: false
+
+/-- Helper pentru evaluarea booleană a listelor (pentru AND/OR) -/
+def foldBool (op : Bool → Bool → Bool) (base : Bool) (args : List Bool) : Bool :=
+  args.foldr op base
+
+/-- Evaluator Boolean complet (Aritmetică + Logică) -/
+partial def evalTerm : SmtTerm → Option Bool
+  -- Constante
+  | SmtTerm.var "true"   => some true
+  | SmtTerm.var "false"  => some false
+  | SmtTerm.app "true" [] => some true
+  | SmtTerm.app "false" [] => some false
+
+  -- Aritmetică
+  | SmtTerm.app ">" [SmtTerm.intLit a, SmtTerm.intLit b] => some (a > b)
+  | SmtTerm.app "<" [SmtTerm.intLit a, SmtTerm.intLit b] => some (a < b)
+  | SmtTerm.app "=" [SmtTerm.intLit a, SmtTerm.intLit b] => some (a == b)
+
+  -- NOU: IF-THEN-ELSE (Doar boolean)
+  | SmtTerm.app "ite" [c, t, e] =>
+      match evalTerm c with
+      | some condVal =>
+          if condVal then evalTerm t else evalTerm e
+      | none => none
+
+  -- Logică
+  | SmtTerm.app "not" [t] =>
+      match evalTerm t with | some b => some (!b) | _ => none
+  | SmtTerm.app "and" args =>
+      match args.mapM evalTerm with | some bs => some (foldBool (· && ·) true bs) | _ => none
+  | SmtTerm.app "or" args =>
+      match args.mapM evalTerm with | some bs => some (foldBool (· || ·) false bs) | _ => none
+
+  | _ => none
+
+
+-- Testează parserul cu un simbol boolean
+#reduce specAssert (Command.assert (SmtTerm.var "true"))
+-- Rezultat: some True
+
+/-- Testează folosind #eval (mult mai rapid și fără erori de recursivitate) -/
+def testLogicComplex := Command.assert
+  (SmtTerm.app "or" [
+      SmtTerm.var "true",
+      SmtTerm.app ">" [SmtTerm.intLit 1, SmtTerm.intLit 5]
+  ])
+
+#eval match testLogicComplex with
+      | .assert t => evalTerm t
+      | _ => none
+-- Rezultat: some true
+
+-- Definim un string SMT complex
+def complexLogicTest := "
+(assert
+  (=>
+    (and (> x 0) (< x 10))
+    (or (= x 100) (not (= x 5)))
+  )
+)"
+
+-- Afișăm cum l-a înțeles parserul
+#eval showCondition complexLogicTest
+
+
+-- 1. Test Vizualizare (Formatare)
+def iteString := "(assert (ite (> x 0) (= y 1) (= y 2)))"
+#eval showCondition iteString
+-- Rezultat: "Condiția este: (if (x > 0) then (y = 1) else (y = 2))"
+
+
+-- 2. Test Semantic (Tipuri)
+-- Verificăm un ITE valid: (ite Bool Int Int) -> Int
+def testIteValid := "
+(declare-fun x () Int)
+(assert
+   (=
+     (ite (> x 0) 10 20)
+     10
+   )
+)
+(check-sat)"
+
+#eval runTest testIteValid
+-- Rezultat: "✅ VALID (Semantic Corect)"
+
+
+-- 3. Test Semantic Invalid
+-- Verificăm (ite Bool Int Bool) -> Eroare (ramuri diferite)
+def testIteInvalid := "
+(declare-fun x () Int)
+(assert
+   (ite (> x 0) 10 true)
+)
+(check-sat)"
+
+#eval runTest testIteInvalid
+-- Rezultat: "❌ INVALID (Eroare Semantică...)"
+
+/-- Extrage valoarea booleană dintr-o comandă assert. -/
+def evalAssert (c : Command) : Option Bool :=
+  match c with
+  | .assert t => evalTerm t
+  | _         => none
+
+/-- Parsează, Interpretează și Evaluează. -/
+def evaluateAssert (input : String) : String :=
+  match parseAssert input with
+  | none => "💥 Eroare Parsare"
+  | some cmd =>
+      match evalAssert cmd with
+      | none => "❌ Nu am putut evalua (variabile necunoscute sau tipuri ne-booleene)"
+      | some b =>
+          if b then "✅ TRUE" else "❌ FALSE"
+
+-- 4. Test Execuție (Evaluare Logică)
+-- (if true then false else true) -> false
+#eval evaluateAssert "(assert (ite true false true))"
+-- Rezultat: "❌ FALSE" (Corect!)
+
+#eval evaluateAssert "(assert (ite false false true))"
+-- Rezultat: "✅ TRUE" (Corect!)
 
 end SmtLib
