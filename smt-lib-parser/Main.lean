@@ -381,4 +381,53 @@ def testNestedError := "
 
 #eval runTest testNestedError
 
+
+/- ==========================================
+   8. INTERPRETARE LOGICĂ (Execuție Simbolică)
+   Transformăm AST-ul SmtTerm direct în Prop Lean.
+   ========================================== -/
+
+/-- Helper: Parsează un string direct într-o comandă (fără a face listă). -/
+def parseAssert (s : String) : Option Command :=
+  match runParser sexp s with
+  | .ok xs     => commandOfSExp xs
+  | .error _e  => none
+
+-- Testare parsing assert
+def testAssertStr := "(assert (> 7 0))"
+#eval runParser sexp testAssertStr -- Verificăm S-Expression-ul brut
+#eval parseAssert testAssertStr    -- Verificăm Command-ul parsat
+
+/-- Interpretează un SmtTerm ca o Prop Lean (marcată ca reducible pentru #reduce).
+    Aici facem legătura între sintaxa SMT și matematica din Lean. -/
+@[reducible]
+def termToProp : SmtTerm → Option Prop
+  | SmtTerm.app ">" [SmtTerm.intLit a, SmtTerm.intLit b] => some (a > b)
+  | SmtTerm.app "<" [SmtTerm.intLit a, SmtTerm.intLit b] => some (a < b)
+  | SmtTerm.app "=" [SmtTerm.intLit a, SmtTerm.intLit b] => some (a = b)
+  | SmtTerm.app ">=" [SmtTerm.intLit a, SmtTerm.intLit b] => some (a ≥ b)
+  | SmtTerm.app "<=" [SmtTerm.intLit a, SmtTerm.intLit b] => some (a ≤ b)
+  -- Putem adăuga și True/False explicit
+  | SmtTerm.app "true" []  => some True
+  | SmtTerm.app "false" [] => some False
+  | _ => none
+
+/-- Extrage propoziția logică dintr-o comandă assert. -/
+@[reducible]
+def specAssert (c : Command) : Option Prop :=
+  match c with
+  | .assert t => termToProp t
+  | _         => none
+
+/-
+   DEMONSTRAȚIE #reduce
+   Lean va evalua expresia matematică 7 > 0.
+-/
+#reduce specAssert (Command.assert (SmtTerm.app ">" [SmtTerm.intLit 7, SmtTerm.intLit 0]))
+-- Rezultat așteptat: some (7 > 0)
+-- Deoarece 7 > 0 este decidabil, Lean știe că este adevărat.
+
+#reduce specAssert (Command.assert (SmtTerm.app "<" [SmtTerm.intLit 10, SmtTerm.intLit 2]))
+-- Rezultat așteptat: some (10 < 2) (care este False matematic)
+
 end SmtLib
