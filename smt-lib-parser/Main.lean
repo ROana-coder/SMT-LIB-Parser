@@ -717,6 +717,9 @@ def evaluateAssert (input : String) : String :=
 #eval evaluateAssert "(assert (ite false false true))"
 -- Rezultat: "✅ TRUE" (Corect!)
 
+#eval evaluateAssert "(assert (ite false 2 3))" -- TO DO: make this work
+-- Rezultat: "❌ Nu am putut evalua..."
+
 
 /- ==========================================
    10. PIPELINE-UL DE SIGURANȚĂ (RunSafe)
