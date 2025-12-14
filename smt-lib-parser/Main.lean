@@ -26,6 +26,7 @@ inductive SmtTerm where
 inductive Command where
   | setLogic   (name : String)
   | declareFun (name : String) (argSorts : List sort) (resSort : sort)
+  | defineFun  (name : String) (args : List (String × sort)) (resSort : sort) (body : SmtTerm)
   | assert     (t : SmtTerm)
   | checkSat
   | exit
@@ -197,6 +198,13 @@ partial def SmtTermOfSExp : SExp → Option SmtTerm
           | none    => none
       | none => none
 
+def parseSortedVar : SExp → Option (String × sort)
+  | SExp.list [SExp.sym name, s] =>
+      match sortOfSExp s with
+      | some srt => some (name, srt)
+      | none => none
+  | _ => none
+
 def commandOfSExp : SExp → Option Command
   | SExp.list (SExp.sym "set-logic" :: SExp.sym name :: []) =>
       some (Command.setLogic name)
@@ -206,6 +214,13 @@ def commandOfSExp : SExp → Option Command
         let argSorts ← argSortsS.mapM sortOfSExp
         let resSort  ← sortOfSExp resS
         pure (Command.declareFun f argSorts resSort)
+  | SExp.list (SExp.sym "define-fun" :: SExp.sym name
+               :: SExp.list argsS :: resS :: bodyS :: []) =>
+      do
+        let args ← argsS.mapM parseSortedVar -- Parsează lista de argumente ((x Int)...)
+        let resSort ← sortOfSExp resS        -- Parsează tipul returnat
+        let body ← SmtTermOfSExp bodyS       -- Parsează corpul funcției
+        pure (Command.defineFun name args resSort body)
   | SExp.list (SExp.sym "assert" :: t :: []) =>
       do
         let tt ← SmtTermOfSExp t
@@ -255,6 +270,26 @@ def checkCommand (ctx : Context) (cmd : Command) : Option Context :=
   | Command.declareFun name args res =>
       let newSig := Signature.mk args res
       some ((name, newSig) :: ctx)
+  -- LOGICA NOUĂ PENTRU define-fun
+  | Command.defineFun name args resSort body =>
+      -- 1. Creăm un context local: Adăugăm argumentele (x, y) peste contextul global
+      --    Astfel, corpul funcției va ști că 'x' este un Int.
+      let localCtx := args.foldl (fun c (argName, argSort) =>
+          (argName, Signature.mk [] argSort) :: c
+      ) ctx
+
+      -- 2. Verificăm tipul corpului în contextul local
+      match inferSort localCtx body with
+      | some bodySort =>
+          -- 3. Corpul trebuie să returneze exact ce a promis funcția (resSort)
+          if bodySort == resSort then
+             -- 4. Succes! Adăugăm funcția în contextul global (fără numele argumentelor, doar tipurile)
+             let argTypes := args.map (·.2)
+             let newSig := Signature.mk argTypes resSort
+             some ((name, newSig) :: ctx)
+          else
+             none -- Eroare: Corpul are alt tip decât cel declarat
+      | none => none -- Eroare: Corpul este invalid (ex: variabilă necunoscută)
 
   | Command.assert t =>
       match inferSort ctx t with
@@ -429,5 +464,69 @@ def specAssert (c : Command) : Option Prop :=
 
 #reduce specAssert (Command.assert (SmtTerm.app "<" [SmtTerm.intLit 10, SmtTerm.intLit 2]))
 -- Rezultat așteptat: some (10 < 2) (care este False matematic)
+
+
+/-- Transformă un SmtTerm înapoi într-un String citibil (matematic). -/
+partial def termToString (t : SmtTerm) : String :=
+  match t with
+  | SmtTerm.intLit n => toString n
+  | SmtTerm.var s    => s
+  -- Caz special pentru operatori binari (ca să arate a matematică: a > b)
+  | SmtTerm.app op [a, b] =>
+      if ["=", ">", "<", ">=", "<=", "+", "-", "*"].contains op then
+        "(" ++ termToString a ++ " " ++ op ++ " " ++ termToString b ++ ")"
+      else
+        -- Funcții standard prefixate: (f x y)
+        "(" ++ op ++ " " ++ termToString a ++ " " ++ termToString b ++ ")"
+  -- Caz general
+  | SmtTerm.app fn args =>
+      "(" ++ fn ++ " " ++ (String.intercalate " " (args.map termToString)) ++ ")"
+
+
+/-- Extrage și afișează condiția dintr-un assert. -/
+def showCondition (input : String) : String :=
+  match parseAssert input with
+  | none => "Eroare Parsare"
+  | some cmd =>
+      match cmd with
+      | Command.assert t => "Condiția este: " ++ termToString t
+      | _ => "Nu este o comandă assert"
+
+-- 1. Test simplu
+#eval showCondition "(assert (> 10 2))"
+-- Rezultat: "Condiția este: (10 > 2)"
+
+-- 2. Test cu variabile (acum le poți vedea!)
+#eval showCondition "(assert (= x y))"
+-- Rezultat: "Condiția este: (x = y)"
+
+-- 3. Test complex (imbricat)
+#eval showCondition "(assert (> (+ x 1) 10))"
+-- Rezultat: "Condiția este: ((x + 1) > 10)"
+
+
+-- TEST DEFINE-FUN + ASSERT
+def testDefine := "
+(define-fun inc ((x Int)) Int (+ x 1))
+(assert (= (inc 5) 6))
+(check-sat)"
+
+-- Ar trebui să fie VALID (Semantic)
+#eval match parse testDefine with
+      | some prob => specification prob
+      | none      => false
+-- Rezultat: true
+
+
+-- TEST EROARE (Corp greșit)
+-- Funcția promite Int, dar returnează Bool (> x 1)
+def testDefineError := "
+(define-fun bad ((x Int)) Int (> x 1))
+(check-sat)"
+
+#eval match parse testDefineError with
+      | some prob => specification prob
+      | none      => false
+-- Rezultat: false
 
 end SmtLib
