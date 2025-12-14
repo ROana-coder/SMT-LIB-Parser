@@ -717,4 +717,64 @@ def evaluateAssert (input : String) : String :=
 #eval evaluateAssert "(assert (ite false false true))"
 -- Rezultat: "✅ TRUE" (Corect!)
 
+
+/- ==========================================
+   10. PIPELINE-UL DE SIGURANȚĂ (RunSafe)
+   ========================================== -/
+
+-- 1. Definim un helper pentru a parsa rapid un string într-o comandă
+def parseHelper (s : String) : Option Command :=
+  match runParser sexp s with
+  | .ok xs     => commandOfSExp xs
+  | .error _e  => none
+
+-- 2. Funcția RunSafe - Leagă componentele existente
+def runSafe (input : String) : String :=
+  -- PASUL 1: Parser
+  match parseHelper input with
+  | none => "💥 Eroare Sintactică (Parser)"
+  | some cmd =>
+      -- PASUL 2: Checker (Verifică tipurile folosind initialContext)
+      -- Aici se verifică dacă (assert ...) primește un Bool.
+      match checkCommand initialContext cmd with
+      | none => "⛔ EROARE SEMANTICĂ: Tipuri greșite (Checker a respins comanda)!"
+      | some _ =>
+          -- PASUL 3: Evaluator (Execută doar dacă Checker-ul a zis DA)
+          -- Folosim funcția ta existentă 'evalAssert' care returnează Option Bool
+          match evalAssert cmd with
+          | some true  => "✅ TRUE"
+          | some false => "❌ FALSE"
+          | none       => "❓ Eroare Runtime (Evaluatorul nu a putut calcula)"
+
+/- ==========================================
+   TESTE FINALE
+   ========================================== -/
+
+-- 1. Test Valid (Trece prin tot pipeline-ul)
+#eval runSafe "(assert (> 10 5))"
+-- Rezultat: "✅ TRUE"
+
+-- 2. Test Invalid Semantic (Respins de Checker)
+-- Deși 10+32 e un calcul valid, un 'assert' cere Bool.
+-- Checker-ul tău ('checkCommand') funcționează corect și respinge asta!
+#eval runSafe "(assert (+ 10 32))"
+-- Rezultat: "⛔ EROARE SEMANTICĂ..."
+
+-- 3. Test Invalid Semantic (Mix de tipuri)
+#eval runSafe "(assert (ite true 10 false))"
+-- Rezultat: "⛔ EROARE SEMANTICĂ..."
+
+#eval runSafe "(assert (ite true true false))"
+
+-- test pentru conditie complexa
+def complexCondition := "
+(assert
+  (ite
+    (and (> 2 0) (< 2 10))
+    (or (= 2 5) (= 2 7))
+    false
+  )
+)"
+#eval runSafe complexCondition
+
 end SmtLib
