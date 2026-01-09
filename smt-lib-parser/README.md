@@ -191,7 +191,3 @@ def iteScript := "
 #eval runScript iteScript
 -- Output: "✅ VALID (Semantically correct)"
 ```
-
-## License
-
-MIT License
