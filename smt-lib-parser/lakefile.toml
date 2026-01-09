@@ -1,7 +1,12 @@
+# SMT-LIB Parser for Lean 4
 name = "smt-lib-parser"
 version = "0.1.0"
-defaultTargets = ["smt-lib-parser"]
+defaultTargets = ["SmtLib"]
+
+[[lean_lib]]
+name = "SmtLib"
+globs = ["SmtLib", "SmtLib.AST", "SmtLib.Parser", "SmtLib.TypeChecker", "SmtLib.Evaluator", "SmtLib.PrettyPrint"]
 
 [[lean_exe]]
-name = "smt-lib-parser"
+name = "tests"
 root = "Main"

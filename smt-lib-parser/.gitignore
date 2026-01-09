@@ -1,0 +1,38 @@
+# Lake build artifacts
+.lake/
+lake-packages/
+
+# Lean compiled files
+*.olean
+*.ilean
+*.trace
+
+# Editor files
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
