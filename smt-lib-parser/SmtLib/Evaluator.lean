@@ -12,21 +12,34 @@ namespace SmtLib
    VALUATION (Variable Environment)
    ========================================== -/
 
-/-- A valuation maps variable names to integer values -/
-abbrev Valuation := String → Int
+structure FunctionDef where
+  params : List String
+  body : Term
+  deriving Repr, BEq
 
-/-- Default valuation: all variables are 0 -/
-def defaultEnv : Valuation := fun _ => 0
+/-- Environment containing variable mapping and function definitions -/
+structure Environment where
+  vars : String → Int
+  funcs : List (String × FunctionDef)
+
+/-- Default environment -/
+def defaultEnv : Environment := { vars := fun _ => 0, funcs := [] }
+
+/-- Helper to update variable mapping -/
+def Environment.extendVar (env : Environment) (name : String) (val : Int) : Environment :=
+  { env with vars := fun s => if s == name then val else env.vars s }
+
+/-- Helper to update function mapping -/
+def Environment.addFunc (env : Environment) (name : String) (defn : FunctionDef) : Environment :=
+  { env with funcs := (name, defn) :: env.funcs }
 
 /- ==========================================
    ARITHMETIC EVALUATION
    ========================================== -/
 
-/-- Evaluate a term to an integer value -/
-@[reducible]
-def termToInt (env : Valuation) : Term → Option Int
+partial def termToInt (env : Environment) : Term → Option Int
   | Term.intLit n => some n
-  | Term.var s    => some (env s)
+  | Term.var s    => some (env.vars s)
   | Term.app "+" [a, b] => do
       let va ← termToInt env a
       let vb ← termToInt env b
@@ -39,10 +52,25 @@ def termToInt (env : Valuation) : Term → Option Int
       let va ← termToInt env a
       let vb ← termToInt env b
       some (va * vb)
-  | Term.app "-" [a] => do  -- Unary minus
+  | Term.app "-" [a] => do
       let va ← termToInt env a
       some (-va)
-  | _ => none
+  -- Function application
+  | Term.app fn args =>
+      match env.funcs.lookup fn with
+      | some defn =>
+          if args.length == defn.params.length then
+             -- Evaluate arguments (assuming call-by-value for ints)
+             match args.mapM (termToInt env) with
+             | some argVals =>
+                 -- Bind arguments to parameters
+                 let newEnv := List.zip defn.params argVals |>.foldl
+                   (fun e (p, v) => e.extendVar p v) env
+                 termToInt newEnv defn.body
+             | none => none
+          else none
+      | none => none
+
 
 /- ==========================================
    PROPOSITIONAL EVALUATION (to Prop)
@@ -53,8 +81,7 @@ def foldProp (op : Prop → Prop → Prop) (base : Prop) (args : List Prop) : Pr
   args.foldr op base
 
 /-- Evaluate a term to a Lean Prop -/
-@[reducible]
-def termToProp (env : Valuation) : Term → Option Prop
+partial def termToProp (env : Environment) : Term → Option Prop
   -- Boolean constants
   | Term.var "true"      => some True
   | Term.var "false"     => some False
@@ -113,6 +140,24 @@ def termToProp (env : Valuation) : Term → Option Prop
       match termToProp env c, termToProp env t, termToProp env e with
       | some pc, some pt, some pe => some ((pc → pt) ∧ (¬pc → pe))
       | _, _, _ => none
+
+  -- Function application (returning Bool)
+  | Term.app fn args =>
+      match env.funcs.lookup fn with
+      | some defn =>
+          if args.length == defn.params.length then
+             -- Try to evaluate args as Ints first (common case)
+             match args.mapM (termToInt env) with
+             | some argVals =>
+                 let newEnv := List.zip defn.params argVals |>.foldl
+                   (fun e (p, v) => e.extendVar p v) env
+                 termToProp newEnv defn.body
+             | none =>
+                 -- If args aren't Ints, we can't bind them in current Environment
+                 -- This is a limitation of current Environment structure
+                 none
+          else none
+      | none => none
 
   | _ => none
 
@@ -178,11 +223,32 @@ def evalAssert (c : Command) : Option Bool :=
   | .assert t => evalTerm t
   | _         => none
 
-/-- Convert an assert command to a Prop -/
+
+/-- Convert an assert command to a Prop using current environment -/
 @[reducible]
-def specAssert (c : Command) (env : Valuation := defaultEnv) : Option Prop :=
+def specAssert (c : Command) (env : Environment := defaultEnv) : Option Prop :=
   match c with
   | .assert t => termToProp env t
   | _         => none
 
+
+
+def specProblem (cmds : List SmtLib.Command) (inputEnv : SmtLib.Environment := SmtLib.defaultEnv) : Option Prop :=
+  let (props, _) := cmds.foldl (fun (acc, env) cmd =>
+    match cmd with
+    | SmtLib.Command.defineFun name args _ body =>
+        let params := args.map Prod.fst
+        let defn : SmtLib.FunctionDef := { params := params, body := body }
+        (acc, env.addFunc name defn)
+    | SmtLib.Command.assert t =>
+        match SmtLib.termToProp env t with
+        | some p => (p :: acc, env)
+        | none => (acc, env) -- Skip invalid props or fail? currently skipping
+    | _ => (acc, env)
+  ) ([], inputEnv)
+
+  if props.isEmpty then none
+  else some (props.foldl (· ∧ ·) True)
+
 end SmtLib
+

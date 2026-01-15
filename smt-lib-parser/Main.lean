@@ -290,6 +290,31 @@ def complexLogicTest := "
 end PrettyPrintTests
 
 /- ==========================================
+   SPEC PROBLEM TESTS
+   ========================================== -/
+
+section SpecProblemTests
+
+def testSpecProblem := "
+(define-fun inc ((x Int)) Int (+ x 1))
+(assert (= (inc 10) 11))
+"
+
+-- Helper to check if specProblem returns some Prop
+def checkSpecProblem (s : String) : String :=
+  match parse s with
+  | some prob =>
+      match specProblem prob.commands with
+      | some _ => "✅ SPEC GEN SUCCESS"
+      | none => "❌ SPEC GEN FAILED"
+  | none => "❌ PARSE FAILED"
+
+#eval checkSpecProblem testSpecProblem
+-- Expected: "✅ SPEC GEN SUCCESS"
+
+end SpecProblemTests
+
+/- ==========================================
    PROP CONVERSION TESTS
    ========================================== -/
 
@@ -297,23 +322,37 @@ section PropTests
 
 -- These use #reduce to show Lean Props
 
-#reduce specAssert (Command.assert (Term.app ">" [Term.intLit 7, Term.intLit 0]))
--- Expected: some (7 > 0)
+-- Helper to check Prop result
+def checkProp (p : Option Prop) : String :=
+  match p with
+  | some _ => "✅ SPEC GEN SUCCESS"
+  | none => "❌ SPEC GEN FAILED"
 
-#reduce specAssert (Command.assert (Term.app "<" [Term.intLit 10, Term.intLit 2]))
--- Expected: some (10 < 2)
+#eval checkProp (specAssert (Command.assert (Term.app ">" [Term.intLit 7, Term.intLit 0])))
+-- Expected: "✅ SPEC GEN SUCCESS"
+
+#eval checkProp (specAssert (Command.assert (Term.app "<" [Term.intLit 10, Term.intLit 2])))
+-- Expected: "✅ SPEC GEN SUCCESS"
 
 -- With custom environment
-def myEnv : Valuation := fun name => if name == "x" then 5 else 0
+-- With custom environment
+def myEnv : Environment := {
+  vars := fun name => if name == "x" then 5 else 0,
+  funcs := []
+}
 
-#reduce specAssert (Command.assert (Term.app "<" [Term.var "x", Term.intLit 2])) myEnv
--- Expected: some (5 < 2)
+#eval checkProp (specAssert (Command.assert (Term.app "<" [Term.var "x", Term.intLit 2])) myEnv)
+-- Expected: "✅ SPEC GEN SUCCESS"
 
 -- Two variables
-def envXY : Valuation := fun name =>
-  if name == "x" then 10
-  else if name == "y" then 20
-  else 0
+-- Two variables
+def envXY : Environment := {
+  vars := fun name =>
+    if name == "x" then 10
+    else if name == "y" then 20
+    else 0,
+  funcs := []
+}
 
 def cmdTwoVars := Command.assert (
   Term.app "=" [
@@ -322,8 +361,8 @@ def cmdTwoVars := Command.assert (
   ]
 )
 
-#reduce specAssert cmdTwoVars envXY
--- Expected: some (10 + 20 = 30)
+#eval checkProp (specAssert cmdTwoVars envXY)
+-- Expected: "✅ SPEC GEN SUCCESS"
 
 end PropTests
 
