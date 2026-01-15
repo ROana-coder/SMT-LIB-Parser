@@ -353,6 +353,25 @@ end SolverControlTests
 
 
 /- ==========================================
+   STRING OPS TESTS
+   ========================================== -/
+
+section StringOpsTests
+
+def testStringOps := "
+(declare-const s String)
+(assert (= (str.len s) 5))
+(assert (str.contains s \"el\"))
+(assert (= (str.++ \"h\" \"ello\") s))
+(check-sat)"
+
+#eval runTest testStringOps
+-- Expected: "✅ VALID (Semantically correct)"
+
+end StringOpsTests
+
+
+/- ==========================================
    PROP CONVERSION TESTS
    ========================================== -/
 

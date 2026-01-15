@@ -32,7 +32,17 @@ def initialContext : Context := [
   ("<",     Signature.mk [Srt.int, Srt.int] Srt.bool),
   (">",     Signature.mk [Srt.int, Srt.int] Srt.bool),
   ("<=",    Signature.mk [Srt.int, Srt.int] Srt.bool),
-  (">=",    Signature.mk [Srt.int, Srt.int] Srt.bool)
+  (">=",    Signature.mk [Srt.int, Srt.int] Srt.bool),
+  
+  -- Strings Theory
+  ("str.++",       Signature.mk [Srt.string, Srt.string] Srt.string),
+  ("str.len",      Signature.mk [Srt.string] Srt.int),
+  ("str.at",       Signature.mk [Srt.string, Srt.int] Srt.string),
+  ("str.substr",   Signature.mk [Srt.string, Srt.int, Srt.int] Srt.string),
+  ("str.prefixof", Signature.mk [Srt.string, Srt.string] Srt.bool),
+  ("str.suffixof", Signature.mk [Srt.string, Srt.string] Srt.bool),
+  ("str.contains", Signature.mk [Srt.string, Srt.string] Srt.bool),
+  ("str.replace",  Signature.mk [Srt.string, Srt.string, Srt.string] Srt.string)
   -- NOTE: "=" and "distinct" are handled specially (polymorphic)
   -- NOTE: "ite" is handled specially (polymorphic result type)
 ]
