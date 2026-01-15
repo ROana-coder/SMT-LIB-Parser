@@ -87,6 +87,10 @@ def Command.toString : Command → String
       s!"(define-fun {name} ({argsStr}) {res} {body.toSExp})"
   | .assert t => s!"(assert {t.toSExp})"
   | .checkSat => "(check-sat)"
+  | .getModel => "(get-model)"
+  | .getValue terms =>
+      let ts := String.intercalate " " (terms.map Term.toSExp)
+      s!"(get-value ({ts}))"
   | .exit => "(exit)"
 
 instance : ToString Command := ⟨Command.toString⟩

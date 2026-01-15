@@ -39,6 +39,8 @@ inductive Command where
   | defineFun    (name : String) (args : List (String × Srt)) (resSort : Srt) (body : Term)
   | assert       (t : Term)
   | checkSat
+  | getModel
+  | getValue     (terms : List Term)
   | exit
   deriving Repr, BEq
 

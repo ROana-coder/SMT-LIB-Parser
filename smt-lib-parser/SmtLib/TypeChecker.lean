@@ -118,6 +118,10 @@ def checkCommand (ctx : Context) (cmd : Command) : Option Context :=
 
   | Command.setLogic _ => some ctx
   | Command.checkSat   => some ctx
+  | Command.getModel   => some ctx
+  | Command.getValue terms =>
+      let sorts := terms.mapM (inferSort ctx)
+      if sorts.isSome then some ctx else none
   | Command.exit       => some ctx
 
 /-- Check all commands in a script -/

@@ -39,6 +39,7 @@ def Environment.addFunc (env : Environment) (name : String) (defn : FunctionDef)
 
 partial def termToInt (env : Environment) : Term → Option Int
   | Term.intLit n => some n
+  | Term.stringLit _ => none
   | Term.var s    => some (env.vars s)
   | Term.app "+" [a, b] => do
       let va ← termToInt env a
@@ -85,6 +86,7 @@ partial def termToProp (env : Environment) : Term → Option Prop
   -- Boolean constants
   | Term.var "true"      => some True
   | Term.var "false"     => some False
+  | Term.stringLit _     => none
   | Term.app "true" []   => some True
   | Term.app "false" []  => some False
 

@@ -167,6 +167,13 @@ def commandOfSExp : SExp → Option Command
   | SExp.list [SExp.sym "check-sat"] =>
       some Command.checkSat
 
+  | SExp.list [SExp.sym "get-model"] =>
+      some Command.getModel
+
+  | SExp.list [SExp.sym "get-value", SExp.list termsS] => do
+      let terms ← termsS.mapM termOfSExp
+      some (Command.getValue terms)
+
   | SExp.list [SExp.sym "exit"] =>
       some Command.exit
 

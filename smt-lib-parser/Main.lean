@@ -332,6 +332,26 @@ def testStringValid := "
 end StringTests
 
 
+
+/- ==========================================
+   SOLVER CONTROL TESTS
+   ========================================== -/
+
+section SolverControlTests
+
+def testSolverControl := "
+(declare-const x Int)
+(assert (> x 0))
+(check-sat)
+(get-model)
+(get-value (x (+ x 1)))"
+
+#eval runTest testSolverControl
+-- Expected: "✅ VALID (Semantically correct)"
+
+end SolverControlTests
+
+
 /- ==========================================
    PROP CONVERSION TESTS
    ========================================== -/
