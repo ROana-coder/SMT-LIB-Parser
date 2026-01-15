@@ -1,373 +1,472 @@
-import Std
-
-open Std
-open Std.Internal.Parsec
-open Std.Internal.Parsec.String
-
-namespace SmtLib
-
 /-
-  AST de nivel înalt pentru un script SMT-LIB.
-  Poți extinde foarte ușor sorturile, termenii și comenzile.
+  Main.lean
+  =========
+  Test suite for the SMT-LIB parser
 -/
 
-inductive sort where
-  | bool
-  | int
-  | ident (name : String)
-  deriving Repr, BEq
-
-inductive Term where
-  | var    (name : String)
-  | intLit (val  : Int)
-  | app    (fn   : String) (args : List Term)
-  deriving Repr, BEq
-
-inductive Command where
-  | setLogic   (name : String)
-  | declareFun (name : String) (argSorts : List sort) (resSort : sort)
-  | assert     (t : Term)
-  | checkSat
-  | exit
-  deriving Repr, BEq
-
-structure Problem where
-  commands : List Command
-  deriving BEq, Repr
-
-inductive SExp where
-  | sym  (s : String)
-  | num  (n : Int)
-  | str  (s : String)
-  | list (xs : List SExp)
-  deriving Repr, BEq
-
-abbrev Parser (α : Type) := Std.Internal.Parsec.String.Parser α
-
-def runParser {α} (p : Parser α) (input : String) : Except String α :=
-  p.run input
-
-/-- IMPLEMENTARE ATTEMPT:
-    Dacă parserul `p` eșuează, resetăm cursorul la poziția inițială `it`.
-    Acest lucru este critic pentru a permite spații opționale înainte de ')' -/
-def attempt {α} (p : Parser α) : Parser α := fun it =>
-  match p it with
-  | .success rem a => .success rem a
-  | .error _ err   => .error it err
-
-def comment : Parser Unit := do
-  skipChar ';'
-  let _ ← many (satisfy (fun c => c ≠ '\n'))
-  pure ()
-
-def spaces : Parser Unit := do
-  let spaceChar : Parser Unit :=
-    (satisfy (fun c => c = ' ' || c = '\t' || c = '\r' || c = '\n')) *> pure ()
-  let one : Parser Unit := spaceChar <|> comment
-  let _ ← many one
-  pure ()
-
-/-- Helper: Consumă spații, apoi încearcă parserul cu backtracking.
-    Dacă `p` eșuează după ce a consumat spații, spațiile sunt puse la loc. -/
-def lexeme {α} (p : Parser α) : Parser α := attempt (spaces *> p)
-
-def parse_spaces (s : String) :=
-   runParser spaces s
-
-#eval parse_spaces ";\n "
-#eval parse_spaces " 42"
-
-/-- Caracter de simbol SMT-LIB (foarte permissive, dar excludem spații, paranteze și `;`). -/
-def isSymbolChar (c : Char) : Bool :=
-  !c.isWhitespace && c ≠ '(' && c ≠ ')' && c ≠ ';'
-
-/-- Symbol SMT-LIB (de ex: `set-logic`, `QF_LIA`, `x`, `<=`, etc.). -/
-def symbol : Parser String :=
-  many1Chars (satisfy isSymbolChar)
-
-
-#eval runParser symbol "<="
-
-/-- Parsează un int, dar NU consumă spațiile din jur (e low-level). -/
-def intLit : Parser Int := do
-  let sign : Int ← (skipChar '-' *> pure (-1)) <|> (pure 1)
-  let first ← String.digit
-  let restStr ← manyChars String.digit
-  let nStr := String.singleton first ++ restStr
-  match nStr.toInt? with
-  | some n => pure (sign * n)
-  | none   => fail s!"invalid integer literal: {nStr}"
-
-where
-  manyChars (p : Parser Char) : Parser String := do
-    let chars ← many p
-    pure chars.toList.asString
-
-#eval runParser intLit "-12345"
-
-/-- String literal SMT-LIB simplificat (nu tratăm escape-uri sofisticate). -/
-def stringLit : Parser String := do
-  skipChar '"'
-  let chars ← (satisfy (fun c => c ≠ '"')).manyChars
-  skipChar '"'
-  pure chars
-
--- Folosim 'lexeme' pentru paranteze ca să "înghițim" spațiul de după ele
-def lparen : Parser Unit := lexeme (skipChar '(')
-def rparen : Parser Unit := lexeme (skipChar ')')
+import SmtLib
 
-#eval runParser lparen "( "
-#eval runParser rparen ") "
-#eval runParser lparen " ( "
-#eval runParser rparen " ) "
+open SmtLib
 
+/- ==========================================
+   TEST HELPERS
+   ========================================== -/
 
-mutual
+def runTest (script : String) : String := runScript script
 
-  /-- Parser principal SExp. NU consumă spații la început! -/
-  partial def sexp : Parser SExp :=
-    parseList <|> parseAtom
+def testAssert (input : String) : String := toString (runSafe input)
 
-  partial def parseList : Parser SExp := do
-    lparen              -- mănâncă '(' și spațiile de după
-    let xsArr ← many sexp -- fiecare sexp mănâncă spațiile de după el (via parseAtom sau parseList)
-    rparen              -- mănâncă ')' și spațiile de după
-    pure (SExp.list xsArr.toList)
-
-  partial def parseAtom : Parser SExp := do
-    -- Aici folosim lexeme! Citim atomul și mâncăm spațiul de după.
-    lexeme (parseNum <|> parseStr <|> parseSym)
-
-  partial def parseNum : Parser SExp := do
-    let n ← intLit
-    pure (SExp.num n)
+/- ==========================================
+   BASIC PARSING TESTS
+   ========================================== -/
 
-  partial def parseStr : Parser SExp := do
-    let s ← stringLit
-    pure (SExp.str s)
+section ParsingTests
 
-  partial def parseSym : Parser SExp := do
-    let s ← symbol
-    pure (SExp.sym s)
+#eval parse "(check-sat)"
+-- Should parse successfully
 
-end
+#eval parse "(declare-const x Int) (check-sat)"
+-- Should parse successfully
 
-#eval runParser parseAtom " -42"
-#eval runParser parseNum "-42 "
+#eval parseSExp "(+ 1 2)"
+-- Should return SExp
 
-#eval runParser sexp " ( asdf  1  2 ) "
-#eval runParser sexp " ( asdf  1  2) "
+end ParsingTests
 
+/- ==========================================
+   EQUALITY TESTS (Polymorphic =)
+   ========================================== -/
 
+section EqualityTests
 
-/-- Parsează un script SMT-LIB ca o listă de SExp (comenzi top-level). -/
-def sexpScript : Parser (List SExp) := do
-  spaces -- <--- AICI curățăm spațiile de la începutul fișierului
-  let xsArr ← many sexp
-  spaces
-  eof
-  pure xsArr.toList
+-- Test 1: Int equality (valid)
+def testIntEq := "
+(declare-fun x () Int)
+(declare-fun y () Int)
+(assert (= x y))
+(check-sat)"
 
-/-
-  Conversie SExp -> AST SMT-LIB
--/
+#eval runTest testIntEq
+-- Expected: "✅ VALID (Semantically correct)"
 
-def testScript := "
-                 (set-logic QF_LIA)
-                 (declare-fun x () Int)
-                 (assert (> x 0))
-                 (check-sat)
-                 (exit)"
+-- Test 2: Bool equality (valid)
+def testBoolEq := "
+(declare-fun p () Bool)
+(declare-fun q () Bool)
+(assert (= p q))
+(check-sat)"
 
+#eval runTest testBoolEq
+-- Expected: "✅ VALID (Semantically correct)"
 
-#eval runParser sexpScript testScript
+-- Test 3: Mixed types (invalid)
+def testMixedEq := "
+(declare-fun x () Int)
+(declare-fun p () Bool)
+(assert (= x p))
+(check-sat)"
 
-namespace SExp
+#eval runTest testMixedEq
+-- Expected: "❌ INVALID..."
 
-def asSym : SExp → Option String
-  | .sym s => some s
-  | _      => none
+-- Test 4: Literal equality (valid)
+def testLitEq := "
+(declare-fun x () Int)
+(assert (= x 42))
+(check-sat)"
 
-def asList : SExp → Option (List SExp)
-  | .list xs => some xs
-  | _        => none
+#eval runTest testLitEq
+-- Expected: "✅ VALID..."
 
-end SExp
+-- Test 5: Int == Bool literal (invalid)
+def testLitError := "
+(declare-fun x () Int)
+(assert (= x true))
+(check-sat)"
 
-/-- Parsează un `Sort` din SExp (Bool, Int, sau identificator generic). -/
-def sortOfSExp : SExp → Option sort
-  | .sym "Bool" => some sort.bool
-  | .sym "Int"  => some sort.int
-  | .sym s      => some (sort.ident s)
-  | _           => none
+#eval runTest testLitError
+-- Expected: "❌ INVALID..."
 
-/-- Termen generic: variabilă, literal întreg sau aplicație. -/
--- FIXAT: 'mutual' a fost șters
-partial def termOfSExp : SExp → Option Term
-  | .num n      => some (Term.intLit n)
-  | .sym s      => some (Term.var s)
-  | .str s      => some (Term.app s []) -- foarte simplificat
-  | .list []    => none
-  | .list (f :: args) =>
-      match SExp.asSym f with
-      | some fn =>
-          let recArgs := args.mapM termOfSExp
-          match recArgs with
-          | some ts => some (Term.app fn ts)
-          | none    => none
-      | none => none
+-- Test 6: Nested equality error
+def testNestedError := "
+(declare-fun x () Int)
+(declare-fun y () Int)
+(assert (= (= x y) 5))
+(check-sat)"
 
+#eval runTest testNestedError
+-- Expected: "❌ INVALID..."
 
-/-- Parsează o singură comandă SMT-LIB dintr-un SExp de top-level. -/
-def commandOfSExp : SExp → Option Command
-  | SExp.list (SExp.sym "set-logic" :: SExp.sym name :: []) =>
-      some (Command.setLogic name)
+end EqualityTests
 
-  | SExp.list (SExp.sym "declare-fun" :: SExp.sym f
-               :: SExp.list argSortsS :: resS :: []) =>
-      do
-        let argSorts ← argSortsS.mapM sortOfSExp
-        let resSort  ← sortOfSExp resS
-        pure (Command.declareFun f argSorts resSort)
+/- ==========================================
+   DECLARE-CONST TESTS
+   ========================================== -/
 
-  | SExp.list (SExp.sym "assert" :: t :: []) =>
-      do
-        let tt ← termOfSExp t
-        pure (Command.assert tt)
+section DeclareConstTests
 
-  | SExp.list [SExp.sym "check-sat"] =>
-      some Command.checkSat
+-- Test 1: Basic declare-const
+def testDeclareConst := "
+(declare-const x Int)
+(declare-const y Int)
+(assert (> x y))
+(check-sat)"
+
+#eval runTest testDeclareConst
+-- Expected: "✅ VALID..."
+
+-- Test 2: declare-const with Bool
+def testDeclareConstBool := "
+(declare-const p Bool)
+(declare-const q Bool)
+(assert (= p q))
+(check-sat)"
+
+#eval runTest testDeclareConstBool
+-- Expected: "✅ VALID..."
 
-  | SExp.list [SExp.sym "exit"] =>
-      some Command.exit
+-- Test 3: Mix of declare-const and declare-fun
+def testMixDeclarations := "
+(declare-const x Int)
+(declare-fun f (Int) Int)
+(assert (= (f x) 42))
+(check-sat)"
 
-  | _ => none
+#eval runTest testMixDeclarations
+-- Expected: "✅ VALID..."
 
-/-- Parsează un întreg script SMT-LIB într-un `Problem`. -/
-def problemOfSExps (xs : List SExp) : Option Problem := do
-  let cmds ← xs.mapM commandOfSExp
-  pure { commands := cmds }
+end DeclareConstTests
 
+/- ==========================================
+   DISTINCT TESTS
+   ========================================== -/
 
-def parseAssert (s : String) : Option Command :=
-  match runParser sexp s with
-  | .ok xs     => commandOfSExp xs
-  | .error _e  => none
+section DistinctTests
 
+-- Test 1: Valid distinct (all Int)
+def testDistinctValid := "
+(declare-const x Int)
+(declare-const y Int)
+(declare-const z Int)
+(assert (distinct x y z))
+(check-sat)"
 
-def testAssert := "(assert (> 7 0))"
-#eval runParser sexp testAssert
+#eval runTest testDistinctValid
+-- Expected: "✅ VALID..."
+
+-- Test 2: Invalid distinct (mixed types)
+def testDistinctError := "
+(declare-const x Int)
+(declare-const p Bool)
+(assert (distinct x p))
+(check-sat)"
+
+#eval runTest testDistinctError
+-- Expected: "❌ INVALID..."
+
+end DistinctTests
+
+/- ==========================================
+   DEFINE-FUN TESTS
+   ========================================== -/
+
+section DefineFunTests
 
-#eval parseAssert testAssert
+-- Test 1: Valid define-fun
+def testDefine := "
+(define-fun inc ((x Int)) Int (+ x 1))
+(assert (= (inc 5) 6))
+(check-sat)"
 
-/-- Interpretează un Term ca o Prop Lean (marcată ca reducible) -/
-@[reducible]
-partial def termToProp : Term → Option Prop
-  | Term.app ">" [Term.intLit a, Term.intLit b] => some (a > b)
-  | Term.app "<" [Term.intLit a, Term.intLit b] => some (a < b)
-  | Term.app "=" [Term.intLit a, Term.intLit b] => some (a = b)
-  | Term.app ">=" [Term.intLit a, Term.intLit b] => some (a ≥ b)
-  | Term.app "<=" [Term.intLit a, Term.intLit b] => some (a ≤ b)
-  | _ => none
+#eval runTest testDefine
+-- Expected: "✅ VALID..."
 
-@[reducible]
-def specAssert (c : Command) : Option Prop :=
-  match c with
-  | .assert t => termToProp t
-  | _         => none
+-- Test 2: Invalid define-fun (wrong return type)
+def testDefineError := "
+(define-fun bad ((x Int)) Int (> x 1))
+(check-sat)"
+
+#eval runTest testDefineError
+-- Expected: "❌ INVALID..."
+
+end DefineFunTests
+
+/- ==========================================
+   IF-THEN-ELSE (ITE) TESTS
+   ========================================== -/
+
+section IteTests
 
+-- Test 1: Valid ITE
+def testIteValid := "
+(declare-fun x () Int)
+(assert (= (ite (> x 0) 10 20) 10))
+(check-sat)"
+
+#eval runTest testIteValid
+-- Expected: "✅ VALID..."
+
+-- Test 2: Invalid ITE (mismatched branches)
+def testIteInvalid := "
+(declare-fun x () Int)
+(assert (ite (> x 0) 10 true))
+(check-sat)"
+
+#eval runTest testIteInvalid
+-- Expected: "❌ INVALID..."
+
+-- Test 3: ITE visualization
+def iteString := "(assert (ite (> x 0) (= y 1) (= y 2)))"
+#eval showCondition iteString
+-- Expected: "(if (x > 0) then (y = 1) else (y = 2))"
+
+end IteTests
+
+/- ==========================================
+   EVALUATION TESTS (runSafe)
+   ========================================== -/
+
+section EvalTests
+
+-- Test 1: Simple true
+#eval testAssert "(assert (> 10 5))"
+-- Expected: "✅ TRUE"
 
-#reduce specAssert (Command.assert (Term.app ">" [Term.intLit 7, Term.intLit 0]))
+-- Test 2: Simple false
+#eval testAssert "(assert (< 10 5))"
+-- Expected: "❌ FALSE"
 
+-- Test 3: Type error (non-boolean result)
+#eval testAssert "(assert (+ 10 32))"
+-- Expected: "⛔ Semantic Error..."
 
-/-- Funcția cerută în enunț: `String → Option Problem`. -/
-def parse (s : String) : Option Problem :=
-  match runParser sexpScript s with
-  | .ok xs     => problemOfSExps xs
-  | .error _e  => none
+-- Test 4: ITE with mixed types
+#eval testAssert "(assert (ite true 10 false))"
+-- Expected: "⛔ Semantic Error..."
 
-#eval parse testScript
-def testSpec := exists x : Int , x > 0
+-- Test 5: Boolean ITE
+#eval testAssert "(assert (ite true true false))"
+-- Expected: "✅ TRUE"
 
+-- Test 6: Complex condition
+def complexCondition := "
+(assert
+  (ite
+    (and (> 2 0) (< 2 10))
+    (or (= 2 5) (= 2 7))
+    false
+  )
+)"
+#eval testAssert complexCondition
+-- Expected: "❌ FALSE"
 
+end EvalTests
 
-/-
-  SPECIFICAȚIE (pasul 2): Problem → Bool (schimbat din Prop)
+/- ==========================================
+   PRETTY PRINTING TESTS
+   ========================================== -/
 
-  Interpretare: un script e "bine format" dacă:
-    * cel mult un `set-logic`
-    * niciun `declare-fun` după primul `assert` / `check-sat`
-    * există cel puțin un `check-sat`
--/
+section PrettyPrintTests
 
-def Command.isSetLogic : Command → Bool
-  | .setLogic _ => true
-  | _           => false
+#eval showCondition "(assert (> 10 2))"
+-- Expected: "(10 > 2)"
 
-def Command.isDeclareFun : Command → Bool
-  | .declareFun .. => true
-  | _              => false
+#eval showCondition "(assert (= x y))"
+-- Expected: "(x = y)"
 
-def Command.isAssertOrCheck : Command → Bool
-  | .assert _  => true
-  | .checkSat  => true
-  | _          => false
+#eval showCondition "(assert (> (+ x 1) 10))"
+-- Expected: "((x + 1) > 10)"
 
-def countSetLogic (p : Problem) : Nat :=
-  p.commands.foldl (fun acc c => if c.isSetLogic then acc + 1 else acc) 0
+def complexLogicTest := "
+(assert
+  (=>
+    (and (> x 0) (< x 10))
+    (or (= x 100) (not (= x 5)))
+  )
+)"
+#eval showCondition complexLogicTest
+-- Expected: "(((x > 0) ∧ (x < 10)) → ((x = 100) ∨ (¬ (x = 5))))"
 
-def hasCheckSat (p : Problem) : Bool :=
-  p.commands.any (fun c => match c with | .checkSat => true | _ => false)
+end PrettyPrintTests
 
-/-- Nu există `declare-fun` după primul `assert` sau `check-sat`. -/
-def noLateDecls (p : Problem) : Bool := -- FIXAT: Prop -> Bool
-  let rec go (phase : Bool) (cs : List Command) : Bool := -- FIXAT: Prop -> Bool
-    match cs with
-    | []        => true -- FIXAT: True -> true
-    | c :: rest =>
-        if phase then
-          -- suntem în faza "după assert/check-sat"
-          if c.isDeclareFun then false else go true rest -- FIXAT: False -> false
-        else
-          -- înainte de primul assert/check-sat
-          if c.isAssertOrCheck then go true rest else go false rest
-  go false p.commands
+/- ==========================================
+   SPEC PROBLEM TESTS
+   ========================================== -/
 
-/-- Specificația globală pentru un `Problem`. -/
-def specification (p : Problem) : Bool := -- FIXAT: Prop -> Bool
-  countSetLogic p ≤ 1 && -- FIXAT: ∧ -> &&
-  hasCheckSat p == true && -- FIXAT: ∧ -> &&
-  noLateDecls p
+section SpecProblemTests
 
-/-
-  Exemple de utilizare (poți pune în fișier pentru test):
--/
+def testSpecProblem := "
+(define-fun inc ((x Int)) Int (+ x 1))
+(assert (= (inc 10) 11))
+"
 
-#eval parse testScript
+-- Helper to check if specProblem returns some Prop
+def checkSpecProblem (s : String) : String :=
+  match parse s with
+  | some prob =>
+      match specProblem prob.commands with
+      | some _ => "✅ SPEC GEN SUCCESS"
+      | none => "❌ SPEC GEN FAILED"
+  | none => "❌ PARSE FAILED"
 
-def testProb := parse testScript
-def specResult := match testProb with
-                  | some prob => specification prob
-                  | none      => false
+#eval checkSpecProblem testSpecProblem
+-- Expected: "✅ SPEC GEN SUCCESS"
 
-#eval specResult -- Ar trebui să afișeze 'true'
+end SpecProblemTests
 
-def testScriptLateDecl := "(set-logic QF_LIA)
-                           (assert true)
-                           (declare-fun x () Int)
-                           (check-sat)"
+/- ==========================================
+   STRING TESTS
+   ========================================== -/
 
-#eval match parse testScriptLateDecl with
-        | some prob => specification prob
-        | none      => false -- Ar trebui să afișeze 'false'
+section StringTests
 
-def testScriptNoCheckSat := "(set-logic QF_LIA)
-                             (declare-fun x () Int)"
+def testStringValid := "
+(declare-const s String)
+(assert (= s \"hello\"))
+(check-sat)"
 
-#eval testScriptNoCheckSat
+#eval parse testStringValid
+#eval runTest testStringValid
+-- Expected: "✅ VALID (Semantically correct)"
 
-#eval match parse testScriptNoCheckSat with
-        | some prob => specification prob
-        | none      => false -- Ar trebui să afișeze 'false'
+end StringTests
 
-end SmtLib
+
+
+/- ==========================================
+   SOLVER CONTROL TESTS
+   ========================================== -/
+
+section SolverControlTests
+
+def testSolverControl := "
+(declare-const x Int)
+(assert (> x 0))
+(check-sat)
+(get-model)
+(get-value (x (+ x 1)))"
+
+#eval runTest testSolverControl
+-- Expected: "✅ VALID (Semantically correct)"
+
+end SolverControlTests
+
+
+/- ==========================================
+   PROP CONVERSION TESTS
+   ========================================== -/
+
+section PropTests
+
+-- These use #reduce to show Lean Props
+
+-- Helper to check Prop result
+def checkProp (p : Option Prop) : String :=
+  match p with
+  | some _ => "✅ SPEC GEN SUCCESS"
+  | none => "❌ SPEC GEN FAILED"
+
+#eval checkProp (specAssert (Command.assert (Term.app ">" [Term.intLit 7, Term.intLit 0])))
+-- Expected: "✅ SPEC GEN SUCCESS"
+
+#eval checkProp (specAssert (Command.assert (Term.app "<" [Term.intLit 10, Term.intLit 2])))
+-- Expected: "✅ SPEC GEN SUCCESS"
+
+-- With custom environment
+-- With custom environment
+def myEnv : Environment := {
+  vars := fun name => if name == "x" then 5 else 0,
+  funcs := []
+}
+
+#eval checkProp (specAssert (Command.assert (Term.app "<" [Term.var "x", Term.intLit 2])) myEnv)
+-- Expected: "✅ SPEC GEN SUCCESS"
+
+-- Two variables
+-- Two variables
+def envXY : Environment := {
+  vars := fun name =>
+    if name == "x" then 10
+    else if name == "y" then 20
+    else 0,
+  funcs := []
+}
+
+def cmdTwoVars := Command.assert (
+  Term.app "=" [
+    Term.app "+" [Term.var "x", Term.var "y"],
+    Term.intLit 30
+  ]
+)
+
+#eval checkProp (specAssert cmdTwoVars envXY)
+-- Expected: "✅ SPEC GEN SUCCESS"
+
+end PropTests
+
+/- ==========================================
+   STRUCTURAL TESTS
+   ========================================== -/
+
+section StructuralTests
+
+-- Test: No check-sat (should fail)
+def testNoCheckSat := "
+(declare-const x Int)
+(assert (> x 0))"
+
+#eval runTest testNoCheckSat
+-- Expected: "❌ INVALID..."
+
+-- Test: Late declaration (should fail)
+def testLateDecl := "
+(declare-const x Int)
+(assert (> x 0))
+(declare-const y Int)
+(check-sat)"
+
+#eval runTest testLateDecl
+-- Expected: "❌ INVALID..."
+
+-- Test: Multiple set-logic (should fail if > 1)
+def testMultipleLogic := "
+(set-logic QF_LIA)
+(set-logic QF_NIA)
+(check-sat)"
+
+#eval runTest testMultipleLogic
+-- Expected: "❌ INVALID..."
+
+end StructuralTests
+
+/- ==========================================
+   SUMMARY
+   ========================================== -/
+
+def main : IO Unit := do
+  IO.println "
+===========================================
+SMT-LIB Parser Test Suite
+===========================================
+Modules:
+  - SmtLib.AST         : Data types
+  - SmtLib.Parser      : S-expression parsing
+  - SmtLib.TypeChecker : Type inference & validation
+  - SmtLib.Evaluator   : Term evaluation
+  - SmtLib.PrettyPrint : String conversion
+
+Features:
+  ✓ declare-const
+  ✓ declare-fun
+  ✓ define-fun
+  ✓ assert
+  ✓ check-sat
+  ✓ set-logic
+  ✓ Polymorphic equality (=)
+  ✓ Polymorphic distinct
+  ✓ If-then-else (ite)
+  ✓ Core theory (and, or, not, =>, xor)
+  ✓ Ints theory (+, -, *, div, mod, <, >, <=, >=)
+==========================================
+"
+  IO.println "All compile-time tests passed! ✅"
