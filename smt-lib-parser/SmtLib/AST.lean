@@ -13,6 +13,7 @@ namespace SmtLib
 inductive Srt where
   | bool
   | int
+  | string
   | ident (name : String)
   deriving Repr, BEq, Inhabited
 
@@ -23,6 +24,7 @@ inductive Srt where
 inductive Term where
   | var    (name : String)
   | intLit (val  : Int)
+  | stringLit (val : String)
   | app    (fn   : String) (args : List Term)
   deriving Repr, BEq, Inhabited
 

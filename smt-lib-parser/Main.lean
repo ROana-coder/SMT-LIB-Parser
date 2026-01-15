@@ -315,6 +315,24 @@ def checkSpecProblem (s : String) : String :=
 end SpecProblemTests
 
 /- ==========================================
+   STRING TESTS
+   ========================================== -/
+
+section StringTests
+
+def testStringValid := "
+(declare-const s String)
+(assert (= s \"hello\"))
+(check-sat)"
+
+#eval parse testStringValid
+#eval runTest testStringValid
+-- Expected: "✅ VALID (Semantically correct)"
+
+end StringTests
+
+
+/- ==========================================
    PROP CONVERSION TESTS
    ========================================== -/
 

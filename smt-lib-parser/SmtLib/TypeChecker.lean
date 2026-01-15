@@ -45,6 +45,7 @@ def initialContext : Context := [
 def inferSort (ctx : Context) (t : Term) : Option Srt :=
   match t with
   | Term.intLit _ => some Srt.int
+  | Term.stringLit _ => some Srt.string
 
   | Term.var name =>
       match ctx.lookup name with

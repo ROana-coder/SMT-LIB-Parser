@@ -15,6 +15,7 @@ namespace SmtLib
 def Srt.toString : Srt → String
   | .bool     => "Bool"
   | .int      => "Int"
+  | .string   => "String"
   | .ident s  => s
 
 instance : ToString Srt := ⟨Srt.toString⟩
@@ -27,6 +28,7 @@ instance : ToString Srt := ⟨Srt.toString⟩
 partial def Term.toString (t : Term) : String :=
   match t with
   | Term.intLit n => s!"{n}"
+  | Term.stringLit s => s!"\"{s}\""
   | Term.var s    => s
 
   -- Logical operators (mathematical symbols)
@@ -64,6 +66,7 @@ instance : ToString Term := ⟨Term.toString⟩
 partial def Term.toSExp (t : Term) : String :=
   match t with
   | Term.intLit n => if n < 0 then s!"(- {-n})" else s!"{n}"
+  | Term.stringLit s => s!"\"{s}\""
   | Term.var s    => s
   | Term.app fn [] => fn
   | Term.app fn args =>

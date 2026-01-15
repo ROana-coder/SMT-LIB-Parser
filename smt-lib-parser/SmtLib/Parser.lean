@@ -117,13 +117,14 @@ def sexpScript : Parser (List SExp) := do
 def sortOfSExp : SExp → Option Srt
   | .sym "Bool" => some Srt.bool
   | .sym "Int"  => some Srt.int
+  | .sym "String" => some Srt.string
   | .sym s      => some (Srt.ident s)
   | _           => none
 
 partial def termOfSExp : SExp → Option Term
   | .num n      => some (Term.intLit n)
   | .sym s      => some (Term.var s)
-  | .str s      => some (Term.app s [])
+  | .str s      => some (Term.stringLit s)
   | .list []    => none
   | .list (f :: args) =>
       match SExp.asSym f with
