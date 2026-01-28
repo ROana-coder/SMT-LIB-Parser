@@ -50,7 +50,7 @@ inductive Command where
 
 structure Problem where
   commands : List Command
-  deriving BEq, Repr
+  deriving BEq, Repr, Inhabited
 
 /- ==========================================
    S-EXPRESSIONS (Low-level parsing)

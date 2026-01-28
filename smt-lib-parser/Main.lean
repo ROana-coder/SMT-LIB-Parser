@@ -298,19 +298,47 @@ section SpecProblemTests
 def testSpecProblem := "
 (define-fun inc ((x Int)) Int (+ x 1))
 (assert (= (inc 10) 11))
-"
+(check-sat)"
 
--- Helper to check if specProblem returns some Prop
+
+-- Helper to check if specProblem returns a valid Prop (always does now)
 def checkSpecProblem (s : String) : String :=
   match parse s with
   | some prob =>
-      match specProblem prob.commands with
-      | some _ => "✅ SPEC GEN SUCCESS"
-      | none => "❌ SPEC GEN FAILED"
+      let _ := specProblem prob.commands
+      "✅ SPEC GEN SUCCESS"
   | none => "❌ PARSE FAILED"
 
+#eval parse testSpecProblem
+#eval runTest testSpecProblem
 #eval checkSpecProblem testSpecProblem
 -- Expected: "✅ SPEC GEN SUCCESS"
+
+def checkSpecProblemProp (s : String) : Prop :=
+  match parse s with
+  | some prob => specProblem prob.commands
+  | none => True
+
+def x := (parse testSpecProblem).get!
+#check x
+
+def y := specProblem x.commands
+#check y
+
+def commands := [SmtLib.Command.defineFun
+                 "inc"
+                 [("x", SmtLib.Srt.int)]
+                 (SmtLib.Srt.int)
+                 (SmtLib.Term.app "+" [SmtLib.Term.var "x", SmtLib.Term.intLit 1]),
+               SmtLib.Command.assert
+                 (SmtLib.Term.app "=" [SmtLib.Term.app "inc" [SmtLib.Term.intLit 10], SmtLib.Term.intLit 11]),
+               SmtLib.Command.checkSat]
+
+-- theorem asdf : specProblem commands := by
+--    unfold specProblem
+--    simp
+
+
 
 end SpecProblemTests
 

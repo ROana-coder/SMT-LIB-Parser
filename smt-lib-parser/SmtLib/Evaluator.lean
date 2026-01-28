@@ -234,8 +234,12 @@ def specAssert (c : Command) (env : Environment := defaultEnv) : Option Prop :=
   | _         => none
 
 
+/-- to do: de validat, sa intoarca o propozitie lean
+assert x = 10
+sa il transforme in exista... (env)
+--/
 
-def specProblem (cmds : List SmtLib.Command) (inputEnv : SmtLib.Environment := SmtLib.defaultEnv) : Option Prop :=
+def specProblem (cmds : List SmtLib.Command) (inputEnv : SmtLib.Environment := SmtLib.defaultEnv) : Prop :=
   let (props, _) := cmds.foldl (fun (acc, env) cmd =>
     match cmd with
     | SmtLib.Command.defineFun name args _ body =>
@@ -245,12 +249,10 @@ def specProblem (cmds : List SmtLib.Command) (inputEnv : SmtLib.Environment := S
     | SmtLib.Command.assert t =>
         match SmtLib.termToProp env t with
         | some p => (p :: acc, env)
-        | none => (acc, env) -- Skip invalid props or fail? currently skipping
+        | none => (acc, env) -- Skip invalid props
     | _ => (acc, env)
   ) ([], inputEnv)
 
-  if props.isEmpty then none
-  else some (props.foldl (· ∧ ·) True)
+  props.foldl (· ∧ ·) True
 
 end SmtLib
-
