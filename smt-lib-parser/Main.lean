@@ -347,100 +347,106 @@ theorem asdf : specProblem commands := by
     defaultEnv
   ]
 
--- Prove specProblemSat for commands by providing witness vals _ = 10
-theorem asdf_sat : specProblemSat commands :=
-  ⟨fun _ => 10, by
-    unfold buildSatBody commands
-    simp [termToPropVal, termToIntVal, expand, defaultEnv, Environment.addFunc, substitute]
-  ⟩
-
 /- ==========================================
-   specProblemSat TESTS - Existential Quantification
-   ========================================== -/
+   SATISFIABILITY - Existential Quantification
+   ==========================================
+   modelSatisfies: checks if a valuation (vals : String → Int) satisfies commands
+   satisfiable: ∃ vals, modelSatisfies vals commands
+-/
 
--- Test: (declare-const x Int) (assert (> x 5)) (assert (< x 10))
--- Should generate: ∃ vals, vals "x" > 5 ∧ vals "x" < 10
+section SatisfiabilityTests
+
+/-- Check if a valuation satisfies all assert commands (Bool version for decidability).
+    Handles define-fun by building up the environment for function expansion. -/
+def modelSatisfiesBool (vals : String → Int) (cmds : List Command) (env : Environment := defaultEnv) : Bool :=
+  match cmds with
+  | [] => true
+  | (Command.defineFun name args _ body) :: rest =>
+      let params := args.map Prod.fst
+      let defn : FunctionDef := { params := params, body := body }
+      modelSatisfiesBool vals rest (env.addFunc name defn)
+  | (Command.assert t) :: rest =>
+      let expandedTerm := expand env t
+      match evalTermVal vals expandedTerm with
+      | some b => b && modelSatisfiesBool vals rest env
+      | none => false
+  | _ :: rest =>
+      modelSatisfiesBool vals rest env
+
+/-- Prop version of modelSatisfies -/
+def modelSatisfies (vals : String → Int) (cmds : List Command) : Prop :=
+  modelSatisfiesBool vals cmds = true
+
+/-- Decidability instance for modelSatisfies -/
+instance : Decidable (modelSatisfies vals cmds) :=
+  inferInstanceAs (Decidable (modelSatisfiesBool vals cmds = true))
+
+/-- A list of commands is satisfiable iff there exists a valuation
+    that makes all assertions true. -/
+def satisfiable (cmds : List Command) : Prop :=
+  ∃ (vals : String → Int), modelSatisfies vals cmds
+
+/-- String representation of the satisfiability proposition -/
+def satisfiableStr (cmds : List Command) : String :=
+  let vars := cmds.filterMap fun cmd =>
+    match cmd with
+    | Command.declareConst name _ => some name
+    | _ => none
+  let asserts := cmds.filterMap fun cmd =>
+    match cmd with
+    | Command.assert t => some (toString t)
+    | _ => none
+  let varStr := String.intercalate ", " vars
+  let assertStr := String.intercalate " ∧ " asserts
+  s!"∃ ({varStr} : Int), {assertStr}"
+
+-- Prove satisfiability for `commands` (inc function test) with witness vals _ = 10
+theorem asdf_sat : satisfiable commands :=
+  ⟨fun _ => 10, by native_decide⟩
+
+#print asdf_sat
+-- Test 1: (declare-const x Int) (assert (> x 5)) (assert (< x 10))
 def satCommands1 := [
   Command.declareConst "x" Srt.int,
   Command.assert (Term.app Op.gt [Term.var "x", Term.intLit 5]),
   Command.assert (Term.app Op.lt [Term.var "x", Term.intLit 10])
 ]
 
--- See what specProblemSat returns:
-#check specProblemSat satCommands1
--- Output: Prop (it's a proposition)
+#check satisfiable satCommands1
+#eval satisfiableStr satCommands1
 
--- Print the proposition as a string with ∃:
-#eval specProblemSatStr satCommands1
--- Output: "∃ (x : Int), (x > 5) ∧ (x < 10)"
+-- Prove satisfiable with witness x = 7
+theorem sat1 : satisfiable satCommands1 :=
+  ⟨fun _ => 7, by native_decide⟩
 
--- The definition of specProblemSat is:
---   def specProblemSat (cmds : List Command) : Prop :=
---     ∃ (vals : String → Int), buildSatBody vals cmds defaultEnv
---
--- So for satCommands1, it returns:
---   ∃ (vals : String → Int), buildSatBody vals satCommands1 defaultEnv
--- Which evaluates to:
---   ∃ (vals : String → Int), vals "x" > 5 ∧ vals "x" < 10 ∧ True
-
--- You can see the ∃ by looking at the definition in Evaluator.lean line 405-406
-
--- To see the actual Prop, look at the type in your IDE:
--- Hover over "sat1" below and you'll see:
---   sat1 : ∃ vals, buildSatBody vals satCommands1 defaultEnv
--- Which expands to:
---   ∃ (vals : String → Int), vals "x" > 5 ∧ (vals "x" < 10 ∧ True)
-
--- Prove it's satisfiable by providing witness: x = 7
-theorem sat1 : specProblemSat satCommands1 :=
-  ⟨fun _ => 7, by
-    unfold buildSatBody satCommands1
-    simp [termToPropVal, termToIntVal, expand, defaultEnv]
-  ⟩
-
--- Print the theorem to see its type:
-#print sat1
-
--- Test with equality: (declare-const y Int) (assert (= y 42))
+-- Test 2: (declare-const y Int) (assert (= y 42))
 def satCommands2 := [
   Command.declareConst "y" Srt.int,
   Command.assert (Term.app Op.eq [Term.var "y", Term.intLit 42])
 ]
 
--- Prove: ∃ vals, vals "y" = 42
-theorem sat2 : specProblemSat satCommands2 :=
-  ⟨fun _ => 42, by
-    unfold buildSatBody satCommands2
-    simp [termToPropVal, termToIntVal, expand, defaultEnv]
-  ⟩
+theorem sat2 : satisfiable satCommands2 :=
+  ⟨fun _ => 42, by native_decide⟩
 
-end SpecProblemTests
+-- Test 3: With define-fun
+def satCommands3 := [
+  Command.defineFun "inc" [("x", Srt.int)] Srt.int
+    (Term.app Op.plus [Term.var "x", Term.intLit 1]),
+  Command.assert (Term.app Op.eq [
+    Term.app (Op.custom "inc") [Term.intLit 10],
+    Term.intLit 11
+  ])
+]
 
+theorem sat3 : satisfiable satCommands3 :=
+  ⟨fun _ => 0, by native_decide⟩
 
-/-  *Exists*  -/
-
-section SemanticTaskTests
-
--- 1. Funcția modelSatisfies - verifică dacă env satisface comenzile
-def modelSatisfies (env : Environment) (cmds : List Command) : Prop :=
-  match cmds with
-  | [] => True
-  | (Command.assert t) :: rest =>
-      -- Ordinea corectă: termToProp env 1000 t
-      let prop := (termToProp env 1000 t).getD False
-      prop ∧ (modelSatisfies env rest)
-  | _ :: rest =>
-      modelSatisfies env rest
-
--- 2. Funcția FINALĂ satisfiable
-def satisfiable (cmds : List Command) : Prop :=
-  ∃ (env : Environment), modelSatisfies env cmds
-
--- 3. Teste simple
+-- Test 4: From parsed string
 def problemText := "
 (declare-const x Int)
 (assert (= x 10))
 "
+
 def getCommands (s : String) : List Command :=
   match parse s with
   | some prob => prob.commands
@@ -450,29 +456,12 @@ def generatedProp : Prop := satisfiable (getCommands problemText)
 
 #check generatedProp
 
+theorem satFromParse : generatedProp :=
+  ⟨fun _ => 10, by native_decide⟩
 
-example : generatedProp := by
-  unfold generatedProp satisfiable getCommands
-  let solutie : Environment := {
-    vars := fun name => if name == "x" then 10 else 0,
-    funcs := []
-  }
-  apply Exists.intro solutie
-  unfold modelSatisfies
-  simp [modelSatisfies, termToProp]
+end SatisfiabilityTests
 
-  let solutie : Environment := {
-    vars := fun name => if name == "x" then 10 else 0,
-    funcs := []
-  }
 
-  apply Exists.intro solutie
-  unfold modelSatisfies
-  simp[problemText]
-
-end SemanticTaskTests
-
-/- *-------* -/
 
 /- ==========================================
    STRING TESTS

@@ -377,54 +377,67 @@ def termToPropVal (vals : String → Int) (t : Term) : Option Prop :=
 
   | _ => none
 
-/--
-  Build the body of the SAT proposition: conjunction of all assertions
-  evaluated with the given valuation.
--/
-def buildSatBody (vals : String → Int) (cmds : List Command) (env : Environment) : Prop :=
-  let (props, _) := cmds.foldl (fun (acc, e) cmd =>
-    match cmd with
-    | Command.defineFun name args _ body =>
-        let params := args.map Prod.fst
-        let defn : FunctionDef := { params := params, body := body }
-        (acc, e.addFunc name defn)
-    | Command.assert t =>
-        match termToPropVal vals (expand e t) with
-        | some p => (p :: acc, e)
-        | none => (acc, e)
-    | _ => (acc, e)
-  ) ([], env)
-  props.foldl (· ∧ ·) True
+/-- Evaluate a term to Bool using a valuation function for variables -/
+def evalTermVal (vals : String → Int) (t : Term) : Option Bool :=
+  match t with
+  | Term.var "true"  => some true
+  | Term.var "false" => some false
+  | Term.app (Op.custom "true") []  => some true
+  | Term.app (Op.custom "false") [] => some false
 
-/--
-  specProblemSat: The satisfiability proposition.
-  Returns: ∃ (vals : String → Int), <all assertions hold under vals>
+  | Term.app Op.gt [t1, t2] => do
+      let v1 ← termToIntVal vals t1
+      let v2 ← termToIntVal vals t2
+      some (v1 > v2)
 
-  This Prop is provable iff there exists a variable assignment
-  that satisfies all assertions.
--/
-def specProblemSat (cmds : List Command) : Prop :=
-  ∃ (vals : String → Int), buildSatBody vals cmds defaultEnv
+  | Term.app Op.lt [t1, t2] => do
+      let v1 ← termToIntVal vals t1
+      let v2 ← termToIntVal vals t2
+      some (v1 < v2)
 
-/--
-  String representation of the SAT proposition.
-  Shows the existential structure in a human-readable format.
--/
-def specProblemSatStr (cmds : List Command) : String :=
-  -- Collect declared variables
-  let vars := cmds.filterMap fun cmd =>
-    match cmd with
-    | Command.declareConst name _ => some name
-    | _ => none
-  -- Collect assertions
-  let asserts := cmds.filterMap fun cmd =>
-    match cmd with
-    | Command.assert t => some (toString t)
-    | _ => none
-  -- Build the string
-  let varStr := String.intercalate ", " vars
-  let assertStr := String.intercalate " ∧ " asserts
-  s!"∃ ({varStr} : Int), {assertStr}"
+  | Term.app Op.eq [t1, t2] => do
+      let v1 ← termToIntVal vals t1
+      let v2 ← termToIntVal vals t2
+      some (v1 == v2)
+
+  | Term.app Op.ge [t1, t2] => do
+      let v1 ← termToIntVal vals t1
+      let v2 ← termToIntVal vals t2
+      some (v1 >= v2)
+
+  | Term.app Op.le [t1, t2] => do
+      let v1 ← termToIntVal vals t1
+      let v2 ← termToIntVal vals t2
+      some (v1 <= v2)
+
+  | Term.app Op.not [t] =>
+      match evalTermVal vals t with
+      | some b => some (!b)
+      | none => none
+
+  | Term.app Op.and args =>
+      match args.mapM (evalTermVal vals) with
+      | some bs => some (foldBool (· && ·) true bs)
+      | none => none
+
+  | Term.app Op.or args =>
+      match args.mapM (evalTermVal vals) with
+      | some bs => some (foldBool (· || ·) false bs)
+      | none => none
+
+  | Term.app Op.imp [t1, t2] =>
+      match evalTermVal vals t1, evalTermVal vals t2 with
+      | some b1, some b2 => some (!b1 || b2)
+      | _, _ => none
+
+  | Term.app Op.ite [c, t, e] =>
+      match evalTermVal vals c with
+      | some condVal => if condVal then evalTermVal vals t else evalTermVal vals e
+      | none => none
+
+  | _ => none
+
+
 
 def specProblem (cmds : List SmtLib.Command) (inputEnv : SmtLib.Environment := SmtLib.defaultEnv) : Prop :=
   let (props, _) := cmds.foldl (fun (acc, env) cmd =>
