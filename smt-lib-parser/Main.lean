@@ -416,6 +416,64 @@ theorem sat2 : specProblemSat satCommands2 :=
 
 end SpecProblemTests
 
+
+/-  *Exists*  -/
+
+section SemanticTaskTests
+
+-- 1. Funcția modelSatisfies - verifică dacă env satisface comenzile
+def modelSatisfies (env : Environment) (cmds : List Command) : Prop :=
+  match cmds with
+  | [] => True
+  | (Command.assert t) :: rest =>
+      -- Ordinea corectă: termToProp env 1000 t
+      let prop := (termToProp env 1000 t).getD False
+      prop ∧ (modelSatisfies env rest)
+  | _ :: rest =>
+      modelSatisfies env rest
+
+-- 2. Funcția FINALĂ satisfiable
+def satisfiable (cmds : List Command) : Prop :=
+  ∃ (env : Environment), modelSatisfies env cmds
+
+-- 3. Teste simple
+def problemText := "
+(declare-const x Int)
+(assert (= x 10))
+"
+def getCommands (s : String) : List Command :=
+  match parse s with
+  | some prob => prob.commands
+  | none => []
+
+def generatedProp : Prop := satisfiable (getCommands problemText)
+
+#check generatedProp
+
+
+example : generatedProp := by
+  unfold generatedProp satisfiable getCommands
+  let solutie : Environment := {
+    vars := fun name => if name == "x" then 10 else 0,
+    funcs := []
+  }
+  apply Exists.intro solutie
+  unfold modelSatisfies
+  simp [modelSatisfies, termToProp]
+
+  let solutie : Environment := {
+    vars := fun name => if name == "x" then 10 else 0,
+    funcs := []
+  }
+
+  apply Exists.intro solutie
+  unfold modelSatisfies
+  simp[problemText]
+
+end SemanticTaskTests
+
+/- *-------* -/
+
 /- ==========================================
    STRING TESTS
    ========================================== -/
