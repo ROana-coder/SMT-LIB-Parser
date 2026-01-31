@@ -132,93 +132,129 @@ def sexpScript : Parser (List SExp) := do
   pure xsArr.toList
 
 /- ==========================================
-   SEXP -> AST CONVERSION
+   SEXP -> AST CONVERSION (with error messages)
    ========================================== -/
 
-def sortOfSExp : SExp → Option Srt
-  | .sym "Bool" => some Srt.bool
-  | .sym "Int"  => some Srt.int
-  | .sym "String" => some Srt.string
-  | .sym s      => some (Srt.ident s)
-  | _           => none
+/-- Convert S-expression to Sort with error messages -/
+def sortOfSExpE : SExp → Except String Srt
+  | .sym "Bool"   => .ok Srt.bool
+  | .sym "Int"    => .ok Srt.int
+  | .sym "String" => .ok Srt.string
+  | .sym s        => .ok (Srt.ident s)
+  | other         => .error s!"Expected sort (Bool, Int, String, or identifier), got: {repr other}"
 
-def termOfSExp : SExp → Option Term
-  | .num n      => some (Term.intLit n)
-  | .sym s      => some (Term.var s)
-  | .str s      => some (Term.stringLit s)
-  | .list []    => none
+/-- Convert S-expression to Term with error messages -/
+def termOfSExpE : SExp → Except String Term
+  | .num n   => .ok (Term.intLit n)
+  | .sym s   => .ok (Term.var s)
+  | .str s   => .ok (Term.stringLit s)
+  | .list [] => .error "Empty list cannot be converted to term"
   | .list (f :: args) =>
       match SExp.asSym f with
       | some fn =>
-          match args.mapM termOfSExp with
-          | some ts => some (Term.app (opOfString fn) ts)
-          | none    => none
-      | none => none
+          match args.mapM termOfSExpE with
+          | .ok ts   => .ok (Term.app (opOfString fn) ts)
+          | .error e => .error s!"In arguments of '{fn}': {e}"
+      | none => .error s!"Expected function symbol, got: {repr f}"
 
-def parseSortedVar : SExp → Option (String × Srt)
+/-- Parse sorted variable like (x Int) with error messages -/
+def parseSortedVarE : SExp → Except String (String × Srt)
   | SExp.list [SExp.sym name, s] =>
-      match sortOfSExp s with
-      | some srt => some (name, srt)
-      | none => none
-  | _ => none
+      match sortOfSExpE s with
+      | .ok srt  => .ok (name, srt)
+      | .error e => .error s!"In variable '{name}': {e}"
+  | other => .error s!"Expected (name Sort), got: {repr other}"
 
-def commandOfSExp : SExp → Option Command
+/-- Convert S-expression to Command with error messages -/
+def commandOfSExpE : SExp → Except String Command
   | SExp.list [SExp.sym "set-logic", SExp.sym name] =>
-      some (Command.setLogic name)
+      .ok (Command.setLogic name)
 
-  | SExp.list [SExp.sym "declare-const", SExp.sym name, sortSExp] => do
-      let s ← sortOfSExp sortSExp
-      pure (Command.declareConst name s)
+  | SExp.list [SExp.sym "declare-const", SExp.sym name, sortSExp] =>
+      match sortOfSExpE sortSExp with
+      | .ok s    => .ok (Command.declareConst name s)
+      | .error e => .error s!"In declare-const '{name}': {e}"
 
-  | SExp.list [SExp.sym "declare-fun", SExp.sym f, SExp.list argSortsS, resS] => do
-      let argSorts ← argSortsS.mapM sortOfSExp
-      let resSort  ← sortOfSExp resS
-      pure (Command.declareFun f argSorts resSort)
+  | SExp.list [SExp.sym "declare-fun", SExp.sym f, SExp.list argSortsS, resS] =>
+      match argSortsS.mapM sortOfSExpE with
+      | .error e => .error s!"In declare-fun '{f}' argument sorts: {e}"
+      | .ok argSorts =>
+          match sortOfSExpE resS with
+          | .ok resSort => .ok (Command.declareFun f argSorts resSort)
+          | .error e    => .error s!"In declare-fun '{f}' return sort: {e}"
 
-  | SExp.list [SExp.sym "define-fun", SExp.sym name, SExp.list argsS, resS, bodyS] => do
-      let args ← argsS.mapM parseSortedVar
-      let resSort ← sortOfSExp resS
-      let body ← termOfSExp bodyS
-      pure (Command.defineFun name args resSort body)
+  | SExp.list [SExp.sym "define-fun", SExp.sym name, SExp.list argsS, resS, bodyS] =>
+      match argsS.mapM parseSortedVarE with
+      | .error e => .error s!"In define-fun '{name}' parameters: {e}"
+      | .ok args =>
+          match sortOfSExpE resS with
+          | .error e => .error s!"In define-fun '{name}' return sort: {e}"
+          | .ok resSort =>
+              match termOfSExpE bodyS with
+              | .ok body   => .ok (Command.defineFun name args resSort body)
+              | .error e   => .error s!"In define-fun '{name}' body: {e}"
 
-  | SExp.list [SExp.sym "assert", t] => do
-      let tt ← termOfSExp t
-      pure (Command.assert tt)
+  | SExp.list [SExp.sym "assert", t] =>
+      match termOfSExpE t with
+      | .ok tt   => .ok (Command.assert tt)
+      | .error e => .error s!"In assert: {e}"
 
   | SExp.list [SExp.sym "check-sat"] =>
-      some Command.checkSat
+      .ok Command.checkSat
 
   | SExp.list [SExp.sym "get-model"] =>
-      some Command.getModel
+      .ok Command.getModel
 
-  | SExp.list [SExp.sym "get-value", SExp.list termsS] => do
-      let terms ← termsS.mapM termOfSExp
-      some (Command.getValue terms)
+  | SExp.list [SExp.sym "get-value", SExp.list termsS] =>
+      match termsS.mapM termOfSExpE with
+      | .ok terms => .ok (Command.getValue terms)
+      | .error e  => .error s!"In get-value: {e}"
 
   | SExp.list [SExp.sym "exit"] =>
-      some Command.exit
+      .ok Command.exit
 
-  | _ => none
+  | SExp.list (SExp.sym cmd :: _) =>
+      .error s!"Unknown or malformed command: {cmd}"
 
-def problemOfSExps (xs : List SExp) : Option Problem := do
-  let cmds ← xs.mapM commandOfSExp
+  | other =>
+      .error s!"Invalid command syntax: {repr other}"
+
+/-- Convert list of S-expressions to Problem with error messages -/
+def problemOfSExpsE (xs : List SExp) : Except String Problem := do
+  let cmds ← xs.mapM commandOfSExpE
   pure { commands := cmds }
+
+/- ==========================================
+   LEGACY OPTION-BASED API (for backwards compatibility)
+   ========================================== -/
+
+def sortOfSExp (s : SExp) : Option Srt := (sortOfSExpE s).toOption
+def termOfSExp (s : SExp) : Option Term := (termOfSExpE s).toOption
+def parseSortedVar (s : SExp) : Option (String × Srt) := (parseSortedVarE s).toOption
+def commandOfSExp (s : SExp) : Option Command := (commandOfSExpE s).toOption
+def problemOfSExps (xs : List SExp) : Option Problem := (problemOfSExpsE xs).toOption
 
 /- ==========================================
    PUBLIC API
    ========================================== -/
 
-/-- Parse an SMT-LIB script from a string -/
-def parse (s : String) : Option Problem :=
+/-- Parse an SMT-LIB script from a string (with error messages) -/
+def parseE (s : String) : Except String Problem :=
   match runParser sexpScript s with
-  | .ok xs    => problemOfSExps xs
-  | .error _  => none
+  | .ok xs    => problemOfSExpsE xs
+  | .error e  => .error s!"Syntax error: {e}"
 
-/-- Parse a single command from a string -/
-def parseCommand (s : String) : Option Command :=
+/-- Parse a single command from a string (with error messages) -/
+def parseCommandE (s : String) : Except String Command :=
   match runParser sexp s with
-  | .ok xs    => commandOfSExp xs
-  | .error _  => none
+  | .ok xs    => commandOfSExpE xs
+  | .error e  => .error s!"Syntax error: {e}"
+
+/-- Parse an SMT-LIB script from a string (legacy Option API) -/
+def parse (s : String) : Option Problem := (parseE s).toOption
+
+/-- Parse a single command from a string (legacy Option API) -/
+def parseCommand (s : String) : Option Command := (parseCommandE s).toOption
 
 /-- Parse a single S-expression from a string -/
 def parseSExp (s : String) : Except String SExp :=

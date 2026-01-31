@@ -17,6 +17,34 @@ def runTest (script : String) : String := runScript script
 def testAssert (input : String) : String := toString (runSafe input)
 
 /- ==========================================
+   ERROR MESSAGE DEMONSTRATION
+   ========================================== -/
+
+section ErrorMessageDemo
+
+-- Successful parse
+#eval parseE "(assert (> x 5))"
+-- Output: Except.ok { commands := ... }
+
+-- Invalid command
+#eval parseE "(unknown-cmd x)"
+-- Output: Except.error "Unknown or malformed command: unknown-cmd"
+
+-- Invalid sort
+#eval parseE "(declare-const x 123)"
+-- Output: Except.error "In declare-const 'x': Expected sort ..."
+
+-- Invalid term in assert
+#eval parseE "(assert ())"
+-- Output: Except.error "In assert: Empty list cannot be converted to term"
+
+-- Missing closing paren
+#eval parseE "(assert (> x 5)"
+-- Output: Except.error "Syntax error: ..."
+
+end ErrorMessageDemo
+
+/- ==========================================
    BASIC PARSING TESTS
    ========================================== -/
 
