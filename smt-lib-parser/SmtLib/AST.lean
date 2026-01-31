@@ -21,11 +21,46 @@ inductive Srt where
    TERMS (Expressions)
    ========================================== -/
 
+inductive Op where
+  | plus | minus | mul | div | mod
+  | not | and | or | xor | imp
+  | eq | lt | gt | le | ge
+  | ite
+  | distinct
+  | num (n : Int) -- For numeric literals in operator position if needed, though usually not an Op
+  | str (s : String) -- For string literals in operator position
+  | custom (name : String)
+  deriving Repr, BEq, Inhabited
+
+def Op.toString : Op → String
+  | .plus => "+"
+  | .minus => "-"
+  | .mul => "*"
+  | .div => "div"
+  | .mod => "mod"
+  | .not => "not"
+  | .and => "and"
+  | .or => "or"
+  | .xor => "xor"
+  | .imp => "=>"
+  | .eq => "="
+  | .lt => "<"
+  | .gt => ">"
+  | .le => "<="
+  | .ge => ">="
+  | .ite => "ite"
+  | .distinct => "distinct"
+  | .num n => s!"{n}"
+  | .str s => s
+  | .custom s => s
+
+instance : ToString Op := ⟨Op.toString⟩
+
 inductive Term where
   | var    (name : String)
   | intLit (val  : Int)
   | stringLit (val : String)
-  | app    (fn   : String) (args : List Term)
+  | app    (op   : Op) (args : List Term)
   deriving Repr, BEq, Inhabited
 
 /- ==========================================

@@ -25,36 +25,38 @@ instance : ToString Srt := ⟨Srt.toString⟩
    ========================================== -/
 
 /-- Convert a term to a human-readable mathematical string -/
-partial def Term.toString (t : Term) : String :=
+def Term.toString (t : Term) : String :=
   match t with
   | Term.intLit n => s!"{n}"
   | Term.stringLit s => s!"\"{s}\""
   | Term.var s    => s
 
   -- Logical operators (mathematical symbols)
-  | Term.app "not" [x] => s!"(¬ {x.toString})"
-  | Term.app "and" args => s!"({String.intercalate " ∧ " (args.map Term.toString)})"
-  | Term.app "or"  args => s!"({String.intercalate " ∨ " (args.map Term.toString)})"
-  | Term.app "=>"  [a, b] => s!"({a.toString} → {b.toString})"
+  | Term.app Op.not [x] => s!"(¬ {x.toString})"
+  | Term.app Op.and args => s!"({String.intercalate " ∧ " (args.map Term.toString)})"
+  | Term.app Op.or  args => s!"({String.intercalate " ∨ " (args.map Term.toString)})"
+  | Term.app Op.imp  [a, b] => s!"({a.toString} → {b.toString})"
 
   -- If-then-else
-  | Term.app "ite" [c, t, e] =>
+  | Term.app Op.ite [c, t, e] =>
       s!"(if {c.toString} then {t.toString} else {e.toString})"
 
   -- Distinct
-  | Term.app "distinct" args =>
+  | Term.app Op.distinct args =>
       s!"(distinct {String.intercalate " " (args.map Term.toString)})"
 
   -- Binary operators (infix notation)
   | Term.app op [a, b] =>
-      if ["=", ">", "<", ">=", "<=", "+", "-", "*", "div", "mod"].contains op then
-        s!"({a.toString} {op} {b.toString})"
-      else
-        s!"({op} {a.toString} {b.toString})"
+      match op with
+      | Op.plus | Op.minus | Op.mul | Op.div | Op.mod
+      | Op.eq | Op.lt | Op.gt | Op.le | Op.ge =>
+          s!"({a.toString} {op.toString} {b.toString})"
+      | _ =>
+          s!"({op.toString} {a.toString} {b.toString})"
 
   -- General application (prefix)
-  | Term.app fn args =>
-      s!"({fn} {String.intercalate " " (args.map Term.toString)})"
+  | Term.app op args =>
+      s!"({op.toString} {String.intercalate " " (args.map Term.toString)})"
 
 instance : ToString Term := ⟨Term.toString⟩
 
@@ -63,14 +65,14 @@ instance : ToString Term := ⟨Term.toString⟩
    ========================================== -/
 
 /-- Convert a term back to SMT-LIB s-expression format -/
-partial def Term.toSExp (t : Term) : String :=
+def Term.toSExp (t : Term) : String :=
   match t with
   | Term.intLit n => if n < 0 then s!"(- {-n})" else s!"{n}"
   | Term.stringLit s => s!"\"{s}\""
   | Term.var s    => s
-  | Term.app fn [] => fn
-  | Term.app fn args =>
-      s!"({fn} {String.intercalate " " (args.map Term.toSExp)})"
+  | Term.app (Op.custom fn) [] => fn
+  | Term.app op args =>
+      s!"({op.toString} {String.intercalate " " (args.map Term.toSExp)})"
 
 /- ==========================================
    COMMAND TO STRING

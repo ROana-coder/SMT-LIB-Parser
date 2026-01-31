@@ -329,16 +329,90 @@ def commands := [SmtLib.Command.defineFun
                  "inc"
                  [("x", SmtLib.Srt.int)]
                  (SmtLib.Srt.int)
-                 (SmtLib.Term.app "+" [SmtLib.Term.var "x", SmtLib.Term.intLit 1]),
+                 (SmtLib.Term.app Op.plus [SmtLib.Term.var "x", SmtLib.Term.intLit 1]),
                SmtLib.Command.assert
-                 (SmtLib.Term.app "=" [SmtLib.Term.app "inc" [SmtLib.Term.intLit 10], SmtLib.Term.intLit 11]),
+                 (SmtLib.Term.app Op.eq [SmtLib.Term.app (Op.custom "inc") [SmtLib.Term.intLit 10], SmtLib.Term.intLit 11]),
                SmtLib.Command.checkSat]
 
--- theorem asdf : specProblem commands := by
---    unfold specProblem
---    simp
+theorem asdf : specProblem commands := by
+  unfold specProblem
+  simp [
+    commands,
+    expand,
+    substitute,
+    termToProp,
+    termToInt,
+    SmtLib.Environment.addFunc,
+    List.lookup,
+    defaultEnv
+  ]
 
+-- Prove specProblemSat for commands by providing witness vals _ = 10
+theorem asdf_sat : specProblemSat commands :=
+  ⟨fun _ => 10, by
+    unfold buildSatBody commands
+    simp [termToPropVal, termToIntVal, expand, defaultEnv, Environment.addFunc, substitute]
+  ⟩
 
+/- ==========================================
+   specProblemSat TESTS - Existential Quantification
+   ========================================== -/
+
+-- Test: (declare-const x Int) (assert (> x 5)) (assert (< x 10))
+-- Should generate: ∃ vals, vals "x" > 5 ∧ vals "x" < 10
+def satCommands1 := [
+  Command.declareConst "x" Srt.int,
+  Command.assert (Term.app Op.gt [Term.var "x", Term.intLit 5]),
+  Command.assert (Term.app Op.lt [Term.var "x", Term.intLit 10])
+]
+
+-- See what specProblemSat returns:
+#check specProblemSat satCommands1
+-- Output: Prop (it's a proposition)
+
+-- Print the proposition as a string with ∃:
+#eval specProblemSatStr satCommands1
+-- Output: "∃ (x : Int), (x > 5) ∧ (x < 10)"
+
+-- The definition of specProblemSat is:
+--   def specProblemSat (cmds : List Command) : Prop :=
+--     ∃ (vals : String → Int), buildSatBody vals cmds defaultEnv
+--
+-- So for satCommands1, it returns:
+--   ∃ (vals : String → Int), buildSatBody vals satCommands1 defaultEnv
+-- Which evaluates to:
+--   ∃ (vals : String → Int), vals "x" > 5 ∧ vals "x" < 10 ∧ True
+
+-- You can see the ∃ by looking at the definition in Evaluator.lean line 405-406
+
+-- To see the actual Prop, look at the type in your IDE:
+-- Hover over "sat1" below and you'll see:
+--   sat1 : ∃ vals, buildSatBody vals satCommands1 defaultEnv
+-- Which expands to:
+--   ∃ (vals : String → Int), vals "x" > 5 ∧ (vals "x" < 10 ∧ True)
+
+-- Prove it's satisfiable by providing witness: x = 7
+theorem sat1 : specProblemSat satCommands1 :=
+  ⟨fun _ => 7, by
+    unfold buildSatBody satCommands1
+    simp [termToPropVal, termToIntVal, expand, defaultEnv]
+  ⟩
+
+-- Print the theorem to see its type:
+#print sat1
+
+-- Test with equality: (declare-const y Int) (assert (= y 42))
+def satCommands2 := [
+  Command.declareConst "y" Srt.int,
+  Command.assert (Term.app Op.eq [Term.var "y", Term.intLit 42])
+]
+
+-- Prove: ∃ vals, vals "y" = 42
+theorem sat2 : specProblemSat satCommands2 :=
+  ⟨fun _ => 42, by
+    unfold buildSatBody satCommands2
+    simp [termToPropVal, termToIntVal, expand, defaultEnv]
+  ⟩
 
 end SpecProblemTests
 
@@ -413,10 +487,10 @@ def checkProp (p : Option Prop) : String :=
   | some _ => "✅ SPEC GEN SUCCESS"
   | none => "❌ SPEC GEN FAILED"
 
-#eval checkProp (specAssert (Command.assert (Term.app ">" [Term.intLit 7, Term.intLit 0])))
+#eval checkProp (specAssert (Command.assert (Term.app Op.gt [Term.intLit 7, Term.intLit 0])))
 -- Expected: "✅ SPEC GEN SUCCESS"
 
-#eval checkProp (specAssert (Command.assert (Term.app "<" [Term.intLit 10, Term.intLit 2])))
+#eval checkProp (specAssert (Command.assert (Term.app Op.lt [Term.intLit 10, Term.intLit 2])))
 -- Expected: "✅ SPEC GEN SUCCESS"
 
 -- With custom environment
@@ -426,7 +500,7 @@ def myEnv : Environment := {
   funcs := []
 }
 
-#eval checkProp (specAssert (Command.assert (Term.app "<" [Term.var "x", Term.intLit 2])) myEnv)
+#eval checkProp (specAssert (Command.assert (Term.app Op.lt [Term.var "x", Term.intLit 2])) myEnv)
 -- Expected: "✅ SPEC GEN SUCCESS"
 
 -- Two variables
@@ -440,8 +514,8 @@ def envXY : Environment := {
 }
 
 def cmdTwoVars := Command.assert (
-  Term.app "=" [
-    Term.app "+" [Term.var "x", Term.var "y"],
+  Term.app Op.eq [
+    Term.app Op.plus [Term.var "x", Term.var "y"],
     Term.intLit 30
   ]
 )

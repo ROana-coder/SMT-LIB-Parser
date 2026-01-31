@@ -33,7 +33,7 @@ def initialContext : Context := [
   (">",     Signature.mk [Srt.int, Srt.int] Srt.bool),
   ("<=",    Signature.mk [Srt.int, Srt.int] Srt.bool),
   (">=",    Signature.mk [Srt.int, Srt.int] Srt.bool),
-  
+
   -- Strings Theory
   ("str.++",       Signature.mk [Srt.string, Srt.string] Srt.string),
   ("str.len",      Signature.mk [Srt.string] Srt.int),
@@ -63,13 +63,14 @@ def inferSort (ctx : Context) (t : Term) : Option Srt :=
       | none     => none
 
   -- Polymorphic equality: (= a b) where a and b have the same type
-  | Term.app "=" [t1, t2] => do
+  -- Polymorphic equality: (= a b) where a and b have the same type
+  | Term.app Op.eq [t1, t2] => do
       let s1 ← inferSort ctx t1
       let s2 ← inferSort ctx t2
       if s1 == s2 then some Srt.bool else none
 
   -- Polymorphic distinct: (distinct a b c ...) all same type
-  | Term.app "distinct" args => do
+  | Term.app Op.distinct args => do
       if args.isEmpty then none
       else
         let sorts ← args.mapM (inferSort ctx)
@@ -79,14 +80,15 @@ def inferSort (ctx : Context) (t : Term) : Option Srt :=
             if rest.all (· == firstSort) then some Srt.bool else none
 
   -- If-then-else: (ite cond then else)
-  | Term.app "ite" [cond, t1, t2] => do
+  | Term.app Op.ite [cond, t1, t2] => do
       let sCond ← inferSort ctx cond
       let s1    ← inferSort ctx t1
       let s2    ← inferSort ctx t2
       if sCond == Srt.bool && s1 == s2 then some s1 else none
 
   -- General function application
-  | Term.app fn args => do
+  | Term.app op args => do
+      let fn := op.toString
       let sig ← ctx.lookup fn
       if sig.args.length != args.length then none
       else

@@ -13,6 +13,27 @@ open Std.Internal.Parsec.String
 
 namespace SmtLib
 
+
+def opOfString : String → Op
+  | "+" => Op.plus
+  | "-" => Op.minus
+  | "*" => Op.mul
+  | "div" => Op.div
+  | "mod" => Op.mod
+  | "not" => Op.not
+  | "and" => Op.and
+  | "or" => Op.or
+  | "xor" => Op.xor
+  | "=>" => Op.imp
+  | "=" => Op.eq
+  | "<" => Op.lt
+  | ">" => Op.gt
+  | "<=" => Op.le
+  | ">=" => Op.ge
+  | "ite" => Op.ite
+  | "distinct" => Op.distinct
+  | s => Op.custom s
+
 /- ==========================================
    PARSER PRIMITIVES
    ========================================== -/
@@ -121,7 +142,7 @@ def sortOfSExp : SExp → Option Srt
   | .sym s      => some (Srt.ident s)
   | _           => none
 
-partial def termOfSExp : SExp → Option Term
+def termOfSExp : SExp → Option Term
   | .num n      => some (Term.intLit n)
   | .sym s      => some (Term.var s)
   | .str s      => some (Term.stringLit s)
@@ -130,7 +151,7 @@ partial def termOfSExp : SExp → Option Term
       match SExp.asSym f with
       | some fn =>
           match args.mapM termOfSExp with
-          | some ts => some (Term.app fn ts)
+          | some ts => some (Term.app (opOfString fn) ts)
           | none    => none
       | none => none
 
